@@ -2,7 +2,7 @@
   "name": "icode",
   "displayName": "iCode",
   "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "publisher": "openjiuwen",
   "license": "Apache-2.0",
   "repository": {
@@ -26,6 +26,7 @@
   "activationEvents": [
     "onView:icode.chatView",
     "onCommand:icode.openChat",
+    "onCommand:icode.openChatInEditor",
     "onCommand:icode.newSession",
     "onCommand:icode.restartAgent",
     "onCommand:icode.setApiKey",
@@ -62,8 +63,13 @@
     "commands": [
       {
         "command": "icode.openChat",
-        "title": "iCode: Open Chat",
+        "title": "iCode: Open Chat (Sidebar)",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "icode.openChatInEditor",
+        "title": "iCode: Open Chat in Editor",
+        "icon": "$(window)"
       },
       {
         "command": "icode.newSession",
@@ -117,9 +123,14 @@
       ],
       "view/title": [
         {
+          "command": "icode.openChatInEditor",
+          "when": "view == icode.chatView",
+          "group": "navigation@1"
+        },
+        {
           "command": "icode.newSession",
           "when": "view == icode.chatView",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "icode.refreshSessions",

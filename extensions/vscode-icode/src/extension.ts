@@ -22,9 +22,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   extContext = context;
   output = vscode.window.createOutputChannel("iCode ACP");
   status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  status.command = "icode.openChat";
+  status.command = "icode.openChatInEditor";
   status.text = "$(comment-discussion) iCode";
-  status.tooltip = "Open iCode Chat";
+  status.tooltip = "Open iCode Chat in Editor";
   status.show();
 
   chat = new ChatViewProvider(context.extensionUri, {
@@ -68,6 +68,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("icode.openChat", () =>
       vscode.commands.executeCommand("icode.chatView.focus")
+    ),
+    vscode.commands.registerCommand("icode.openChatInEditor", () =>
+      chat.openInEditor(vscode.ViewColumn.Beside)
     ),
     vscode.commands.registerCommand("icode.newSession", () => void newSession()),
     vscode.commands.registerCommand("icode.restartAgent", () => void restartAgent()),
@@ -156,7 +159,7 @@ function setEditorAttachment(
 }
 
 async function focusChat(): Promise<void> {
-  await vscode.commands.executeCommand("icode.chatView.focus");
+  chat.openInEditor(vscode.ViewColumn.Beside);
 }
 
 async function addSelectionToChat(): Promise<void> {

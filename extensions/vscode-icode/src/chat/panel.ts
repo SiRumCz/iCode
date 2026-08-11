@@ -16,10 +16,14 @@ interface TranscriptLine {
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "icode.chatView";
+  public static readonly editorViewType = "icode.chatEditor";
+
   private view?: vscode.WebviewView;
+  private editorPanel?: vscode.WebviewPanel;
+  private readonly targets = new Set<vscode.Webview>();
   private assistantOpen = false;
   private thoughtOpen = false;
-  private wired = false;
+  private wiredView = false;
   /** Survives webview recreation when the sidebar is hidden/shown. */
   private transcript: TranscriptLine[] = [];
   private openAssistant?: TranscriptLine;
@@ -45,47 +49,91 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this.extensionUri],
     };
 
-    if (!this.wired) {
-      this.wired = true;
+    if (!this.wiredView) {
+      this.wiredView = true;
       webviewView.webview.html = this.html(webviewView.webview);
-      webviewView.webview.onDidReceiveMessage(
-        (msg: {
-          type?: string;
-          text?: string;
-          interactionId?: string;
-          approved?: boolean;
-        }) => {
-          if (msg.type === "send" && msg.text) {
-            this.assistantOpen = false;
-            this.thoughtOpen = false;
-            this.handlers.onSend(msg.text);
-          } else if (msg.type === "cancel") {
-            this.handlers.onCancel();
-          } else if (msg.type === "approve" && msg.interactionId) {
-            this.handlers.onApprove(msg.interactionId, Boolean(msg.approved));
-          } else if (msg.type === "clearAttachment") {
-            this.handlers.onClearAttachment?.();
-          } else if (msg.type === "ready") {
-            this.pushSettings();
-            this.restoreTranscript();
-          }
-        }
-      );
+      this.attachWebview(webviewView.webview);
       webviewView.onDidDispose(() => {
-        this.wired = false;
+        this.wiredView = false;
+        this.detachWebview(webviewView.webview);
         this.view = undefined;
       });
     } else {
-      // View instance reused / re-resolved — refresh settings and transcript.
       this.pushSettings();
-      this.restoreTranscript();
+      this.restoreTranscriptTo(webviewView.webview);
     }
   }
 
-  /** Push current submit keybinding into the webview (call on config change). */
+  /** Open (or reveal) chat as a normal editor tab — works beside Explorer. */
+  openInEditor(column: vscode.ViewColumn = vscode.ViewColumn.Beside): void {
+    if (this.editorPanel) {
+      this.editorPanel.reveal(column, false);
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(
+      ChatViewProvider.editorViewType,
+      "iCode Chat",
+      { viewColumn: column, preserveFocus: false },
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [this.extensionUri],
+      }
+    );
+    this.editorPanel = panel;
+    panel.webview.html = this.html(panel.webview);
+    this.attachWebview(panel.webview);
+    panel.onDidDispose(() => {
+      this.detachWebview(panel.webview);
+      if (this.editorPanel === panel) {
+        this.editorPanel = undefined;
+      }
+    });
+  }
+
+  private attachWebview(webview: vscode.Webview): void {
+    this.targets.add(webview);
+    webview.onDidReceiveMessage(
+      (msg: {
+        type?: string;
+        text?: string;
+        interactionId?: string;
+        approved?: boolean;
+      }) => {
+        if (msg.type === "send" && msg.text) {
+          this.assistantOpen = false;
+          this.thoughtOpen = false;
+          this.handlers.onSend(msg.text);
+        } else if (msg.type === "cancel") {
+          this.handlers.onCancel();
+        } else if (msg.type === "approve" && msg.interactionId) {
+          this.handlers.onApprove(msg.interactionId, Boolean(msg.approved));
+        } else if (msg.type === "clearAttachment") {
+          this.handlers.onClearAttachment?.();
+        } else if (msg.type === "ready") {
+          this.pushSettingsTo(webview);
+          this.restoreTranscriptTo(webview);
+        }
+      }
+    );
+  }
+
+  private detachWebview(webview: vscode.Webview): void {
+    this.targets.delete(webview);
+  }
+
+  /** Push current submit keybinding into all chat surfaces. */
   pushSettings(): void {
     const mode = readSubmitKeybinding();
     this.post({ type: "settings", submitKeybinding: mode });
+  }
+
+  private pushSettingsTo(webview: vscode.Webview): void {
+    const mode = readSubmitKeybinding();
+    void webview.postMessage({
+      type: "settings",
+      submitKeybinding: mode,
+    });
   }
 
   private finalizeOpenBubbles(): void {
@@ -95,11 +143,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.thoughtOpen = false;
   }
 
-  private restoreTranscript(): void {
-    if (!this.transcript.length) {
-      return;
-    }
-    this.post({
+  private historyPayload(): Record<string, unknown> {
+    return {
       type: "history",
       messages: this.transcript.map((line) => ({
         role:
@@ -113,9 +158,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               ? `Thinking\n${line.content}`
               : line.content,
       })),
-    });
+    };
+  }
+
+  private restoreTranscriptTo(webview: vscode.Webview): void {
+    if (this.transcript.length) {
+      void webview.postMessage(this.historyPayload());
+    }
     if (this.attachmentLabel) {
-      this.post({ type: "attachment", label: this.attachmentLabel });
+      void webview.postMessage({
+        type: "attachment",
+        label: this.attachmentLabel,
+      });
     }
   }
 
@@ -156,13 +210,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return { role: "system" as const, content };
       })
       .filter((m): m is TranscriptLine => Boolean(m));
-    this.post({
-      type: "history",
-      messages: this.transcript.map((m) => ({
-        role: m.role,
-        content: m.content,
-      })),
-    });
+    this.post(this.historyPayload());
   }
 
   appendAssistant(text: string): void {
@@ -221,7 +269,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private post(message: Record<string, unknown>): void {
-    void this.view?.webview.postMessage(message);
+    for (const webview of this.targets) {
+      void webview.postMessage(message);
+    }
   }
 
   private html(webview: vscode.Webview): string {
@@ -260,8 +310,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${hljsDarkUri}" class="hljs-theme" data-scheme="dark" disabled />
   <style>
     :root { color-scheme: light dark; }
-    body { font-family: var(--vscode-font-family); margin: 0; padding: 8px; color: var(--vscode-foreground); }
-    #log { height: calc(100vh - 110px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+    #log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+    body { font-family: var(--vscode-font-family); margin: 0; padding: 8px; color: var(--vscode-foreground);
+      height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; }
     .msg { padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
     .user { background: var(--vscode-inputValidation-infoBackground, rgba(0,120,212,.15)); }
     .assistant { background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,.15)); }
@@ -314,7 +365,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       border-left: 2px solid var(--vscode-descriptionForeground, #888); padding-left: 8px; }
     .thought .label { font-style: normal; opacity: 0.8; margin-bottom: 4px; display: block; }
     .permission { border: 1px solid var(--vscode-inputValidation-warningBorder, orange); padding: 8px; border-radius: 6px; }
-    #composer { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    #composer { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; flex-shrink: 0; }
     #attach {
       display: none; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px;
       background: var(--vscode-badge-background, rgba(128,128,128,.25));

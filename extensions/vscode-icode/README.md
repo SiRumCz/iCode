@@ -58,7 +58,8 @@ If Output shows `Read-only file system: '/logs'`, upgrade the CLI (log bootstrap
 
 | Command | Action |
 |---------|--------|
-| iCode: Open Chat | Focus chat webview |
+| iCode: Open Chat (Sidebar) | Focus the Activity Bar Chat view |
+| iCode: Open Chat in Editor | Open chat as an editor tab (beside Explorer) |
 | iCode: New Session | `session/new` |
 | iCode: Restart Agent | Kill ACP child |
 | iCode: Set API Key | SecretStorage |
