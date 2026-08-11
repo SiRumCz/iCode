@@ -52,11 +52,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("icode.showDiff", () => void showDiff()),
     vscode.commands.registerCommand("icode.attachActiveFile", () => attachActiveFile()),
     vscode.commands.registerCommand("icode.refreshSessions", () => sessions.refresh()),
-    vscode.commands.registerCommand("icode.loadSession", (item?: SessionItem) =>
-      void loadSession(item?.sessionId)
+    vscode.commands.registerCommand(
+      "icode.loadSession",
+      (arg?: SessionItem | string) => void loadSession(sessionIdFromArg(arg))
     ),
-    vscode.commands.registerCommand("icode.deleteSession", (item?: SessionItem) =>
-      void deleteSession(item)
+    vscode.commands.registerCommand(
+      "icode.deleteSession",
+      (arg?: SessionItem | string) => void deleteSession(arg)
     )
   );
 }
@@ -220,12 +222,23 @@ async function loadSession(sessionId?: string): Promise<void> {
   );
 }
 
-async function deleteSession(item?: SessionItem): Promise<void> {
-  const sessionId = item?.sessionId;
+function sessionIdFromArg(arg?: SessionItem | string): string | undefined {
+  if (!arg) {
+    return undefined;
+  }
+  if (typeof arg === "string") {
+    return arg;
+  }
+  return arg.sessionId;
+}
+
+async function deleteSession(arg?: SessionItem | string): Promise<void> {
+  const sessionId = sessionIdFromArg(arg);
   if (!sessionId) {
     return;
   }
-  const label = item?.label ? String(item.label) : sessionId;
+  const label =
+    typeof arg === "object" && arg?.label ? String(arg.label) : sessionId;
   const choice = await vscode.window.showWarningMessage(
     `Delete session “${label}”? This cannot be undone.`,
     { modal: true },

@@ -16,7 +16,8 @@ export class SessionItem extends vscode.TreeItem {
     this.command = {
       command: "icode.loadSession",
       title: "Load Session",
-      arguments: [this],
+      // Must be JSON-serializable — passing `this` breaks as `__vsc…` commands.
+      arguments: [sessionId],
     };
     this.iconPath = new vscode.ThemeIcon("comment-discussion");
   }

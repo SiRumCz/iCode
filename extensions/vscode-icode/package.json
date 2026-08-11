@@ -2,7 +2,7 @@
   "name": "icode",
   "displayName": "iCode",
   "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "openjiuwen",
   "license": "Apache-2.0",
   "repository": {
@@ -115,14 +115,9 @@
       ],
       "view/item/context": [
         {
-          "command": "icode.loadSession",
-          "when": "view == icode.sessionsView && viewItem == icodeSession",
-          "group": "inline@1"
-        },
-        {
           "command": "icode.deleteSession",
           "when": "view == icode.sessionsView && viewItem == icodeSession",
-          "group": "inline@2"
+          "group": "inline"
         },
         {
           "command": "icode.deleteSession",
