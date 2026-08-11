@@ -87,3 +87,55 @@ class TestSessionStore:
         assert data["model"] == "gpt-4o"
         assert "created_at" in data
         datetime.fromisoformat(data["created_at"])
+
+    def test_set_title_force_and_manual(self, tmp_path: Path) -> None:
+        from openjiuwen_icode.features.session_title import (
+            TITLE_LLM,
+            TITLE_MANUAL,
+        )
+
+        store = SessionStore(store_dir=tmp_path)
+        assert store.set_title("x") is False  # no current
+        store.new_session("t1", "m")
+        assert store.set_title("  ") is False
+        assert store.set_title("Manual", source=TITLE_MANUAL)
+        assert store.current is not None
+        assert store.current.title == "Manual"
+        # LLM blocked without force
+        assert store.set_title("From LLM", source=TITLE_LLM) is False
+        assert store.set_title("Forced", source=TITLE_LLM, force=True)
+        assert store.current.title == "Forced"
+        # identical no-op
+        assert (
+            store.set_title("Forced", source=TITLE_LLM, force=True) is False
+        )
+
+    def test_update_metadata(self, tmp_path: Path) -> None:
+        store = SessionStore(store_dir=tmp_path)
+        assert store.update_metadata(model="x") is False
+        store.new_session("m1", "old-model", workdir="/a")
+        assert store.update_metadata(model="old-model") is False
+        assert store.update_metadata(
+            model="new-model",
+            workdir="/b",
+            agent_profile="explore",
+        )
+        assert store.current is not None
+        assert store.current.model == "new-model"
+        assert store.current.workdir == "/b"
+        assert store.current.agent_profile == "explore"
+
+    def test_delete_session(self, tmp_path: Path) -> None:
+        store = SessionStore(store_dir=tmp_path)
+        store.new_session("del-me", "m")
+        store.add_message("user", "bye")
+        path = tmp_path / "del-me.json"
+        bak = path.with_suffix(path.suffix + ".bak")
+        bak.write_text("{}", encoding="utf-8")
+        (tmp_path / "del-me.recovery.json").write_text("{}", encoding="utf-8")
+        assert path.exists()
+        assert store.delete_session("del-me") is True
+        assert not path.exists()
+        assert not bak.exists()
+        assert store.current is None
+        assert store.delete_session("missing") is False

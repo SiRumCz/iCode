@@ -131,7 +131,8 @@ class SubAgentCard(Vertical):
         super().__init__()
         self.invocation_id = invocation_id
         self.agent_name = agent_name or "subagent"
-        self.task = task or ""
+        # Avoid clobbering Textual MessagePump.task (read-only property).
+        self.task_brief = task or ""
         self.transport = transport or ""
         self._state = "running"
         self._detail = ""
@@ -295,9 +296,9 @@ class SubAgentCard(Vertical):
 
     def set_running(self, *, task: str = "", clear_tools: bool = False) -> None:
         if task:
-            self.task = task
+            self.task_brief = task
         self._state = "running"
-        self._detail = _truncate(self.task) if self.task else ""
+        self._detail = _truncate(self.task_brief) if self.task_brief else ""
         self._retry_banner = ""
         if clear_tools:
             self._inner_tools.clear()

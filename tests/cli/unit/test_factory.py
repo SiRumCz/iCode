@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import pytest
 
 from openjiuwen_icode.agent.config import CLIConfig
 from openjiuwen_icode.agent.factory import (
+    _filter_none_values,
+    _inline_skills_for_rail,
     _load_audio_config,
+    _load_cli_content,
     _load_vision_config,
+    _script_timeout,
+)
+from openjiuwen_icode.skills.config import (
+    InlineSkillConfig,
+    SkillsUserConfig,
 )
 
 
@@ -102,3 +113,60 @@ class TestLoadAudioConfig:
             result.base_url
             == "https://audio.example.com/v1"
         )
+
+
+class TestFilterNoneValues:
+    def test_drops_none_keeps_falsey(self) -> None:
+        assert _filter_none_values(
+            {"a": 1, "b": None, "c": "", "d": 0, "e": False}
+        ) == {"a": 1, "c": "", "d": 0, "e": False}
+
+    def test_empty_dict(self) -> None:
+        assert _filter_none_values({}) == {}
+
+
+class TestLoadCliContent:
+    def test_loads_existing_identity(self) -> None:
+        text = _load_cli_content("en", "IDENTITY.md")
+        assert "OpenJiuWen iCode" in text
+
+    def test_missing_file_returns_empty(self) -> None:
+        assert _load_cli_content("en", "DOES_NOT_EXIST.md") == ""
+
+    def test_unknown_language_returns_empty(self) -> None:
+        assert _load_cli_content("zz", "IDENTITY.md") == ""
+
+
+class TestInlineSkillsAndTimeout:
+    def test_inline_skills_for_rail_maps_resources(self) -> None:
+        cfg = SkillsUserConfig(
+            inline=(
+                InlineSkillConfig(
+                    name="demo",
+                    description="d",
+                    instructions="do it",
+                    resources=(("note.txt", "hi"),),
+                ),
+            ),
+            script_timeout=42,
+        )
+        with patch(
+            "openjiuwen_icode.skills.load_skills_config",
+            return_value=cfg,
+        ):
+            rows = _inline_skills_for_rail()
+        assert rows == [
+            {
+                "name": "demo",
+                "description": "d",
+                "instructions": "do it",
+                "resources": [{"name": "note.txt", "content": "hi"}],
+            }
+        ]
+
+    def test_script_timeout_reads_config(self) -> None:
+        with patch(
+            "openjiuwen_icode.skills.load_skills_config",
+            return_value=SimpleNamespace(script_timeout=77),
+        ):
+            assert _script_timeout() == 77

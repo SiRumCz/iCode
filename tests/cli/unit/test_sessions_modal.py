@@ -58,3 +58,91 @@ def test_build_session_rows_sort_and_filter() -> None:
     assert "Title:" in tip
     assert "Model:" in tip
     assert "cli-bbbb" in tip
+
+
+def test_presenter_helpers_coverage() -> None:
+    from datetime import datetime, timezone, timedelta
+
+    from openjiuwen_icode.tui.screens.sessions_presenter import (
+        absolute_time,
+        column_by_key,
+        directory_display,
+        format_size,
+        short_id,
+        time_ago,
+        title_display,
+        _snippet,
+    )
+
+    assert format_size(2_000_000_000).endswith("GB")
+    now = datetime(2026, 8, 6, tzinfo=timezone.utc)
+    assert time_ago(
+        (now - timedelta(seconds=10)).isoformat(), now=now
+    ) == "just now"
+    assert "m ago" in time_ago(
+        (now - timedelta(minutes=5)).isoformat(), now=now
+    )
+    assert "h ago" in time_ago(
+        (now - timedelta(hours=3)).isoformat(), now=now
+    )
+    assert time_ago(
+        (now - timedelta(days=1)).isoformat(), now=now
+    ) == "1 day ago"
+    assert "days ago" in time_ago(
+        (now - timedelta(days=5)).isoformat(), now=now
+    )
+    assert time_ago(
+        (now - timedelta(days=40)).isoformat(), now=now
+    ) == "1 month ago"
+    assert "months ago" in time_ago(
+        (now - timedelta(days=90)).isoformat(), now=now
+    )
+    assert time_ago(
+        (now - timedelta(days=400)).isoformat(), now=now
+    ) == "1 year ago"
+    assert "years ago" in time_ago(
+        (now - timedelta(days=900)).isoformat(), now=now
+    )
+    assert absolute_time("2026-08-06T01:00:00+00:00")
+    assert absolute_time("") == "-"
+    assert short_id("abcdefghijklmnop") == "abcdefghijkl"
+    assert directory_display("") == "-"
+    assert "…" in directory_display("x" * 40, max_width=10)
+    assert title_display({"id": "cli-12345678", "title": ""}).endswith("..")
+    assert column_by_key("missing").key == "updated"
+    assert column_by_key("title").key == "title"
+    assert _snippet("") == ""
+    assert "…" in _snippet("word " * 40)
+    snip = _snippet("aaa NEEDLE bbb ccc", needle="NEEDLE")
+    assert "NEEDLE" in snip
+
+    rows = build_session_rows(
+        [
+            {
+                "id": "z",
+                "title": "",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+                "turns": 1,
+                "size_bytes": 1,
+                "directory": "/d",
+                "preview": "only in preview UNIQUE",
+            }
+        ],
+        sort_column="title",
+        query="UNIQUE",
+    )
+    assert len(rows) == 1
+    for key in ("id", "directory", "turns", "size", "nope"):
+        build_session_rows(
+            [
+                {
+                    "id": "a",
+                    "title": "T",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "turns": 2,
+                    "size_bytes": 3,
+                    "directory": "/x",
+                }
+            ],
+            sort_column=key,
+        )

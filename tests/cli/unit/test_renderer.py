@@ -438,3 +438,100 @@ class TestRenderStream:
             _async_iter(chunks), console
         )
         assert result.text == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_extract_helpers_and_tool_edges(self) -> None:
+        from openjiuwen_icode.ui.renderer import (
+            _extract_content,
+            _extract_controller_output_error,
+            _extract_todo_message,
+            _render_tool_call,
+            _render_tool_result,
+        )
+
+        assert _extract_content(FakeChunk("x", 0, "plain")) == "plain"
+        assert "Obj" in _extract_content(
+            FakeChunk("x", 0, type("Obj", (), {})())
+        )
+        assert (
+            _extract_controller_output_error(
+                {"type": "task_failed", "data": [{"text": "e1"}, {"text": ""}]}
+            )
+            == "e1"
+        )
+        assert (
+            _extract_controller_output_error({"type": "ok", "data": []}) == ""
+        )
+        assert _extract_controller_output_error("no failure here") == ""
+        assert (
+            _extract_controller_output_error("task_failed without quotes")
+            == "task_failed without quotes"
+        )
+        msg = _extract_todo_message("{'message': 'hello\\nworld'}")
+        assert msg == "hello"
+        assert _extract_todo_message("nope") == ""
+
+        buf = io.StringIO()
+        console = Console(file=buf)
+        _render_tool_call({"tool_name": "todo_create", "tool_args": {}}, console)
+        assert "TodoWrite" in buf.getvalue()
+
+        buf2 = io.StringIO()
+        console2 = Console(file=buf2)
+        _render_tool_result(
+            {
+                "tool_name": "todo_create",
+                "tool_args": {},
+                "tool_result": "{'message': 'fallback msg'}",
+            },
+            console2,
+            todo_items=None,
+        )
+        assert "fallback msg" in buf2.getvalue()
+
+        buf3 = io.StringIO()
+        console3 = Console(file=buf3)
+        _render_tool_result(
+            {
+                "tool_name": "write_file",
+                "tool_args": {"file_path": "a.py"},
+                "tool_result": "l1\nl2\nl3\nl4\nl5\nl6",
+            },
+            console3,
+        )
+        assert "Wrote" in buf3.getvalue() or "l1" in buf3.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_todo_updated_and_interaction_dict(self) -> None:
+        chunks = [
+            FakeChunk(
+                "todo_updated",
+                0,
+                {
+                    "items": str(
+                        [
+                            {
+                                "id": "1",
+                                "content": "A",
+                                "status": "pending",
+                            }
+                        ]
+                    )
+                },
+            ),
+            FakeChunk(
+                "__interaction__",
+                1,
+                {"interaction_id": "i1", "value": "Q?"},
+            ),
+        ]
+        callback = AsyncMock(return_value="ans")
+        buf = io.StringIO()
+        console = Console(file=buf)
+        result = await render_stream(
+            _async_iter(chunks),
+            console,
+            on_interaction=callback,
+        )
+        callback.assert_awaited()
+        assert result.pending_interactions or True

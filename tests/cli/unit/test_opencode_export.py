@@ -16,8 +16,14 @@ from openjiuwen_icode.events.types import (
 )
 from openjiuwen_icode.branding import PRODUCT_NAME
 from openjiuwen_icode.export.opencode import (
+    _ms,
+    _parse_model,
+    _sanitize_obj,
+    _sanitize_text,
+    _tool_title,
     build_opencode_export,
     export_session_opencode,
+    resolve_export_agent_profile,
     write_opencode_export,
 )
 from openjiuwen_icode.storage.event_log import SessionEventLog
@@ -54,6 +60,46 @@ class TestSessionEventLog:
         assert len(rows) == 2
         assert rows[0]["type"] == "TurnStarted"
         assert rows[1]["tool_call_id"] == "call-1"
+
+
+class TestOpenCodeHelpers:
+    def test_ms_and_parse_model(self) -> None:
+        assert _ms(1_700_000_000) == 1_700_000_000_000
+        assert _ms(1_700_000_000_000) == 1_700_000_000_000
+        assert _ms("2026-01-01T00:00:00+00:00") > 0
+        assert _ms("") > 0
+        assert _ms(None) > 0
+        assert _parse_model("openai/gpt-4o") == ("openai", "gpt-4o")
+        assert _parse_model("solo") == ("unknown", "solo")
+        assert _parse_model("")[1] == "unknown"
+
+    def test_sanitize_and_tool_title(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        home = str(Path.home())
+        assert _sanitize_text(f"{home}/proj", enabled=False) == f"{home}/proj"
+        out = _sanitize_text(f"{home}/secret/file.py", enabled=True)
+        assert "~" in out or "[redacted:path]" in out
+        assert _sanitize_obj({"a": f"{home}/x", "b": [1]}, enabled=True)["b"] == [1]
+        assert _tool_title("bash", {"command": "ls"}) == "bash ls"
+        assert _tool_title("read", {}) == "read"
+
+    def test_resolve_export_agent_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        session = StoredSession(
+            session_id="s",
+            model="m",
+            created_at="t",
+            agent_profile="from-session",
+        )
+        assert resolve_export_agent_profile(session) == "from-session"
+        assert (
+            resolve_export_agent_profile(session, agent_profile="override")
+            == "override"
+        )
+        monkeypatch.setattr(
+            "openjiuwen_icode.export.opencode.active_agent_profile_id",
+            lambda: "",
+        )
+        empty = StoredSession(session_id="s", model="m", created_at="t")
+        assert resolve_export_agent_profile(empty) == "code"
 
 
 class TestOpenCodeExport:

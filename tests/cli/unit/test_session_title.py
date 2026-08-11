@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -21,9 +22,12 @@ from openjiuwen_icode.features.session_title import (
     TITLE_LLM,
     TITLE_MANUAL,
     TITLE_PROVISIONAL,
+    extract_assistant_invoke_text,
     format_session_list,
+    llm_title_enabled,
     looks_like_message_repr,
     provisional_title,
+    refine_title_with_llm,
     sanitize_llm_title,
 )
 from openjiuwen_icode.host.demo_backend import DemoBackend
@@ -48,6 +52,100 @@ class TestProvisionalTitle:
         bad = "role='assistant' content='' name=None tool_calls=None"
         assert sanitize_llm_title(bad) == ""
         assert looks_like_message_repr(bad)
+
+
+class TestExtractAndLlmTitle:
+    def test_extract_assistant_invoke_text_variants(self) -> None:
+        assert extract_assistant_invoke_text(None) == ""
+        assert (
+            extract_assistant_invoke_text(
+                type("R", (), {"parser_content": "  via parser  "})()
+            )
+            == "via parser"
+        )
+        assert (
+            extract_assistant_invoke_text(
+                type("R", (), {"content": "  plain  "})()
+            )
+            == "plain"
+        )
+        assert (
+            extract_assistant_invoke_text(
+                type(
+                    "R",
+                    (),
+                    {
+                        "content": [
+                            "a",
+                            {"text": "b"},
+                            {"content": "c"},
+                            {"text": ""},
+                        ]
+                    },
+                )()
+            )
+            == "a b c"
+        )
+        assert extract_assistant_invoke_text({"content": "dict"}) == "dict"
+        assert extract_assistant_invoke_text(object()) == ""
+
+    def test_llm_title_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENJIUWEN_SESSION_TITLE_LLM", raising=False)
+        assert llm_title_enabled() is True
+        monkeypatch.setenv("OPENJIUWEN_SESSION_TITLE_LLM", "0")
+        assert llm_title_enabled() is False
+
+    @pytest.mark.asyncio
+    async def test_refine_title_with_llm_guards(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENJIUWEN_SESSION_TITLE_LLM", "0")
+        assert await refine_title_with_llm("u", "a", SimpleNamespace()) is None
+        monkeypatch.setenv("OPENJIUWEN_SESSION_TITLE_LLM", "1")
+        assert await refine_title_with_llm("u", "a", None) is None
+        assert (
+            await refine_title_with_llm(
+                "u",
+                "a",
+                SimpleNamespace(api_key="", provider="OpenAI", model="m"),
+            )
+            is None
+        )
+        assert (
+            await refine_title_with_llm(
+                "",
+                "a",
+                SimpleNamespace(
+                    api_key="k", provider="OpenAI", model="m", api_base=None
+                ),
+            )
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_refine_title_with_llm_mocked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENJIUWEN_SESSION_TITLE_LLM", "1")
+        cfg = SimpleNamespace(
+            api_key="sk",
+            provider="OpenAI",
+            model="gpt",
+            api_base="http://x",
+        )
+        reply = SimpleNamespace(parser_content="Title: Nice Session")
+        model = MagicMock()
+        model.invoke = AsyncMock(return_value=reply)
+        with patch(
+            "openjiuwen.core.foundation.llm.model.Model",
+            return_value=model,
+        ), patch(
+            "openjiuwen.core.foundation.llm.schema.config.ModelClientConfig"
+        ), patch(
+            "openjiuwen.core.foundation.llm.schema.config.ModelRequestConfig"
+        ):
+            out = await refine_title_with_llm("user text", "assistant", cfg)
+        assert out == "Nice Session"
 
 
 class TestDisplaySessionTitle:

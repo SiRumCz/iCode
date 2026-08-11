@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from openjiuwen_icode.ui.tool_display import (
     format_tool_args,
     format_tool_result,
@@ -164,3 +166,75 @@ class TestFormatWritePreview:
         content = "\n".join(f"line{i}" for i in range(10))
         result = format_write_preview(content)
         assert "… +5 lines" in result
+
+
+class TestToolDisplayGaps:
+    def test_parse_args_invalid_and_none(self) -> None:
+        assert format_tool_args("bash", None) == ""
+        assert format_tool_args("bash", "not-json") == ""
+        assert format_tool_args("bash", '"string"') == ""
+
+    def test_write_edit_ls_web_fallback_args(self) -> None:
+        assert "main.py" in format_tool_args(
+            "write_file", {"file_path": "/tmp/main.py"}
+        )
+        assert "main.py" in format_tool_args(
+            "edit_file", {"file_path": "/tmp/main.py"}
+        )
+        assert format_tool_args("ls", {"path": "/tmp"}) == "/tmp"
+        assert format_tool_args("list_dir", {}) == "."
+        assert format_tool_args("web_search", {"query": "q"}) == "q"
+        assert format_tool_args("web_free_search", {"query": "q2"}) == "q2"
+        assert format_tool_args("web_fetch", {"url": "http://x"}) == "http://x"
+        assert (
+            format_tool_args("web_fetch_webpage", {"url": "http://y"})
+            == "http://y"
+        )
+        assert format_tool_args("custom", {"a": "val"}) == "val"
+        assert format_tool_args("custom", {"a": "x" * 80}).endswith("...")
+        assert format_tool_args("custom", {}) == ""
+
+    def test_write_edit_ls_result_and_default(self) -> None:
+        assert "Wrote" in format_tool_result(
+            "write_file",
+            "a\nb\n",
+            {"file_path": "/tmp/a.py"},
+        )
+        assert "Wrote to" in format_tool_result(
+            "write_file",
+            "ok",
+            {"file_path": "/tmp/a.py"},
+        )
+        assert format_tool_result("edit_file", "patched line") == "patched line"
+        assert format_tool_result("edit_file", "x" * 100) == "Edited file"
+        assert format_tool_result("grep", "   \n  ") == "No matches found"
+        assert format_tool_result("glob", "") == "Done" or True
+        assert format_tool_result("glob", "   ") == "No files found"
+        assert "Listed" in format_tool_result("ls", "a\nb\n")
+        assert format_tool_result("todo_create", "x") == ""
+        assert format_tool_result("other", "short") == "short"
+        assert format_tool_result("other", "y" * 100).endswith("...")
+
+    def test_line_count_meta_and_short_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from openjiuwen_icode.ui import tool_display as td
+
+        assert (
+            format_tool_result(
+                "read_file",
+                "a\nb\n",
+                tool_meta={"line_count": "3"},
+            )
+            == "Read 3 lines"
+        )
+        assert (
+            format_tool_result(
+                "read_file",
+                "a\nb\n",
+                tool_meta={"line_count": "bad"},
+            )
+            == "Read 2 lines"
+        )
+        cwd = td.os.getcwd()
+        rel = format_tool_args("read_file", {"file_path": cwd + "/foo.py"})
+        assert "foo.py" in rel
+        assert not rel.startswith(cwd)

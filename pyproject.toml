@@ -77,4 +77,11 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-omit = ["tests/*"]
+# Omit interactive shells and the full Textual app entry; screens/widgets and
+# helpers are covered by unit tests (Pilot). Click CLI is e2e-only.
+omit = [
+    "tests/*",
+    "openjiuwen_icode/tui/app.py",
+    "openjiuwen_icode/cli.py",
+    "openjiuwen_icode/ui/repl.py",
+]
