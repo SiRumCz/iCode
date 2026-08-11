@@ -8,11 +8,23 @@ export interface ChatHandlers {
   onClearAttachment?: () => void;
 }
 
+interface TranscriptLine {
+  role: "user" | "assistant" | "system" | "tool" | "thought";
+  content: string;
+  title?: string;
+}
+
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "icode.chatView";
   private view?: vscode.WebviewView;
   private assistantOpen = false;
   private thoughtOpen = false;
+  private wired = false;
+  /** Survives webview recreation when the sidebar is hidden/shown. */
+  private transcript: TranscriptLine[] = [];
+  private openAssistant?: TranscriptLine;
+  private openThought?: TranscriptLine;
+  private attachmentLabel = "";
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -25,32 +37,49 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     _token: vscode.CancellationToken
   ): void {
     this.view = webviewView;
+    // Keep DOM/JS state when switching Activity Bar views (Explorer ↔ iCode).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (webviewView as any).retainContextWhenHidden = true;
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     };
-    webviewView.webview.html = this.html(webviewView.webview);
-    webviewView.webview.onDidReceiveMessage(
-      (msg: {
-        type?: string;
-        text?: string;
-        interactionId?: string;
-        approved?: boolean;
-      }) => {
-        if (msg.type === "send" && msg.text) {
-          this.assistantOpen = false;
-          this.thoughtOpen = false;
-          this.handlers.onSend(msg.text);
-        } else if (msg.type === "cancel") {
-          this.handlers.onCancel();
-        } else if (msg.type === "approve" && msg.interactionId) {
-          this.handlers.onApprove(msg.interactionId, Boolean(msg.approved));
-        } else if (msg.type === "clearAttachment") {
-          this.handlers.onClearAttachment?.();
+
+    if (!this.wired) {
+      this.wired = true;
+      webviewView.webview.html = this.html(webviewView.webview);
+      webviewView.webview.onDidReceiveMessage(
+        (msg: {
+          type?: string;
+          text?: string;
+          interactionId?: string;
+          approved?: boolean;
+        }) => {
+          if (msg.type === "send" && msg.text) {
+            this.assistantOpen = false;
+            this.thoughtOpen = false;
+            this.handlers.onSend(msg.text);
+          } else if (msg.type === "cancel") {
+            this.handlers.onCancel();
+          } else if (msg.type === "approve" && msg.interactionId) {
+            this.handlers.onApprove(msg.interactionId, Boolean(msg.approved));
+          } else if (msg.type === "clearAttachment") {
+            this.handlers.onClearAttachment?.();
+          } else if (msg.type === "ready") {
+            this.pushSettings();
+            this.restoreTranscript();
+          }
         }
-      }
-    );
-    this.pushSettings();
+      );
+      webviewView.onDidDispose(() => {
+        this.wired = false;
+        this.view = undefined;
+      });
+    } else {
+      // View instance reused / re-resolved — refresh settings and transcript.
+      this.pushSettings();
+      this.restoreTranscript();
+    }
   }
 
   /** Push current submit keybinding into the webview (call on config change). */
@@ -59,22 +88,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "settings", submitKeybinding: mode });
   }
 
-  clear(): void {
+  private finalizeOpenBubbles(): void {
+    this.openAssistant = undefined;
+    this.openThought = undefined;
     this.assistantOpen = false;
     this.thoughtOpen = false;
+  }
+
+  private restoreTranscript(): void {
+    if (!this.transcript.length) {
+      return;
+    }
+    this.post({
+      type: "history",
+      messages: this.transcript.map((line) => ({
+        role:
+          line.role === "tool" || line.role === "thought"
+            ? "system"
+            : line.role,
+        content:
+          line.role === "tool" && line.title
+            ? `${line.title}${line.content ? `\n${line.content}` : ""}`
+            : line.role === "thought"
+              ? `Thinking\n${line.content}`
+              : line.content,
+      })),
+    });
+    if (this.attachmentLabel) {
+      this.post({ type: "attachment", label: this.attachmentLabel });
+    }
+  }
+
+  clear(): void {
+    this.finalizeOpenBubbles();
+    this.transcript = [];
     this.post({ type: "clear" });
   }
 
   postUser(text: string): void {
-    this.assistantOpen = false;
-    this.thoughtOpen = false;
+    this.finalizeOpenBubbles();
+    this.transcript.push({ role: "user", content: text });
     this.post({ type: "user", text });
   }
 
   /** Render a complete assistant message (history / non-streaming). */
   postAssistant(text: string): void {
-    this.assistantOpen = false;
-    this.thoughtOpen = false;
+    this.finalizeOpenBubbles();
+    this.transcript.push({ role: "assistant", content: text });
     this.post({ type: "assistant", text });
   }
 
@@ -82,49 +142,71 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   loadHistory(
     messages: Array<{ role?: string; content?: string }>
   ): void {
-    this.assistantOpen = false;
-    this.thoughtOpen = false;
+    this.finalizeOpenBubbles();
+    this.transcript = messages
+      .map((m) => {
+        const role = String(m.role || "").toLowerCase();
+        const content = String(m.content || "");
+        if (!content) {
+          return undefined;
+        }
+        if (role === "user" || role === "assistant" || role === "system") {
+          return { role, content } as TranscriptLine;
+        }
+        return { role: "system" as const, content };
+      })
+      .filter((m): m is TranscriptLine => Boolean(m));
     this.post({
       type: "history",
-      messages: messages.map((m) => ({
-        role: String(m.role || ""),
-        content: String(m.content || ""),
+      messages: this.transcript.map((m) => ({
+        role: m.role,
+        content: m.content,
       })),
     });
   }
 
   appendAssistant(text: string): void {
     this.thoughtOpen = false;
-    if (!this.assistantOpen) {
+    this.openThought = undefined;
+    if (!this.assistantOpen || !this.openAssistant) {
+      this.openAssistant = { role: "assistant", content: "" };
+      this.transcript.push(this.openAssistant);
       this.post({ type: "assistantStart" });
       this.assistantOpen = true;
     }
+    this.openAssistant.content += text;
     this.post({ type: "assistantChunk", text });
   }
 
   appendThought(text: string): void {
-    if (!this.thoughtOpen) {
+    if (!this.thoughtOpen || !this.openThought) {
+      this.openThought = { role: "thought", content: "" };
+      this.transcript.push(this.openThought);
       this.post({ type: "thoughtStart" });
       this.thoughtOpen = true;
     }
+    this.openThought.content += text;
     this.post({ type: "thoughtChunk", text });
   }
 
   postSystem(text: string): void {
-    this.assistantOpen = false;
-    this.thoughtOpen = false;
+    this.finalizeOpenBubbles();
+    this.transcript.push({ role: "system", content: text });
     this.post({ type: "system", text });
   }
 
   postTool(title: string, detail: string): void {
-    this.assistantOpen = false;
-    this.thoughtOpen = false;
+    this.finalizeOpenBubbles();
+    this.transcript.push({
+      role: "tool",
+      title,
+      content: detail || "",
+    });
     this.post({ type: "tool", title, detail });
   }
 
   postPermission(interactionId: string, message: string): void {
-    this.assistantOpen = false;
-    this.thoughtOpen = false;
+    this.finalizeOpenBubbles();
     this.post({ type: "permission", interactionId, message });
   }
 
@@ -134,7 +216,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Show or clear the pending editor attachment chip above the composer. */
   setAttachment(label: string | undefined): void {
-    this.post({ type: "attachment", label: label ?? "" });
+    this.attachmentLabel = label ?? "";
+    this.post({ type: "attachment", label: this.attachmentLabel });
   }
 
   private post(message: Record<string, unknown>): void {
@@ -615,6 +698,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
       }
     });
+
+    vscode.postMessage({ type: 'ready' });
   </script>
 </body>
 </html>`;
