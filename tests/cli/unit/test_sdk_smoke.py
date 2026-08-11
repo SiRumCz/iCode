@@ -19,9 +19,22 @@ def test_icode_event_bus_importable() -> None:
     assert EventBus is not None
 
 
-def test_compat_shim_aliases_paths() -> None:
-    """Deprecated harness.cli.paths should resolve via shim when installed."""
-    from openjiuwen.harness.cli.paths import icode_home
-    from openjiuwen_icode.paths import icode_home as direct
+def test_icode_paths_available() -> None:
+    from openjiuwen_icode.paths import icode_home
 
-    assert icode_home is direct
+    assert callable(icode_home)
+
+
+def test_sdk_compat_filters_skill_rail_kwargs() -> None:
+    from openjiuwen.harness.rails import SkillUseRail
+    from openjiuwen_icode.sdk_compat import call_with_supported_kwargs
+
+    rail = call_with_supported_kwargs(
+        SkillUseRail,
+        skills_dir=["/tmp"],
+        skill_mode="all",
+        include_tools=False,
+        inline_skills=[{"name": "x"}],
+        script_timeout=30,
+    )
+    assert rail is not None

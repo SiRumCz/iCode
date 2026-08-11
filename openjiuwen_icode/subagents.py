@@ -11,7 +11,9 @@ from openjiuwen.core.single_agent.schema.agent_card import AgentCard
 from openjiuwen.core.common.logging import logger
 from openjiuwen.harness.rails.sys_operation_rail import SysOperationRail
 from openjiuwen.harness.schema.config import SubAgentConfig
-from openjiuwen.harness.subagents.concurrency import SubagentConcurrencyConfig
+from openjiuwen_icode.sdk_compat import load_concurrency_types
+
+SubagentConcurrencyConfig, _ = load_concurrency_types()
 
 
 def load_subagent_concurrency_config() -> SubagentConcurrencyConfig:

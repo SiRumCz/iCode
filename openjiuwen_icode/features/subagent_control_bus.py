@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from openjiuwen.core.session.agent import Session
@@ -17,11 +18,22 @@ from openjiuwen_icode.events import (
 from openjiuwen_icode.features.subagent_awaiting import (
     publish_subagent_awaiting_state,
 )
-from openjiuwen.harness.tools.subagent.control import (
-    abort_subagent_invocation,
-    retry_subagent_invocation,
-)
-from openjiuwen.harness.tools.subagent.lifecycle import emit_subagent_chunk
+
+logger = logging.getLogger(__name__)
+
+try:
+    from openjiuwen.harness.tools.subagent.control import (
+        abort_subagent_invocation,
+        retry_subagent_invocation,
+    )
+    from openjiuwen.harness.tools.subagent.lifecycle import emit_subagent_chunk
+
+    _HAS_CONTROL = True
+except ImportError:  # pragma: no cover - older SDK
+    _HAS_CONTROL = False
+    abort_subagent_invocation = None  # type: ignore[assignment]
+    retry_subagent_invocation = None  # type: ignore[assignment]
+    emit_subagent_chunk = None  # type: ignore[assignment]
 
 
 def _parent_session(agent: Any) -> Session | None:
@@ -34,6 +46,19 @@ async def handle_subagent_abort(
     invocation_id: str,
     session_id: str | None,
 ) -> None:
+    if not _HAS_CONTROL:
+        await bus.publish(
+            SystemNotice(
+                text=(
+                    "Sub-agent abort is unavailable on this openjiuwen SDK "
+                    "(tools.subagent.control missing)."
+                ),
+                kind="error",
+                session_id=session_id,
+            )
+        )
+        return
+
     agent = getattr(backend, "agent", None)
     sess = _parent_session(agent)
     ok, msg, agent_name = await abort_subagent_invocation(
@@ -67,6 +92,19 @@ async def handle_subagent_retry(
     invocation_id: str,
     session_id: str | None,
 ) -> None:
+    if not _HAS_CONTROL:
+        await bus.publish(
+            SystemNotice(
+                text=(
+                    "Sub-agent retry is unavailable on this openjiuwen SDK "
+                    "(tools.subagent.control missing)."
+                ),
+                kind="error",
+                session_id=session_id,
+            )
+        )
+        return
+
     agent = getattr(backend, "agent", None)
     sess = _parent_session(agent)
     if sess is None:

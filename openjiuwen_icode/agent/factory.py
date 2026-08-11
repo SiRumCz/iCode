@@ -30,6 +30,10 @@ from openjiuwen_icode.rails import TokenTrackingRail
 from openjiuwen_icode.rails.tool_tracker import (
     ToolTrackingRail,
 )
+from openjiuwen_icode.sdk_compat import (
+    call_with_supported_kwargs,
+    load_concurrency_types,
+)
 from openjiuwen.harness.rails import (
     AskUserRail,
     ConfirmInterruptRail,
@@ -464,9 +468,11 @@ def create_agent(
     )
 
     # Default skill directories — SkillUseRail silently
-    # skips directories that do not exist.
+    # skips directories that do not exist. Newer SDK kwargs
+    # (inline_skills / script_timeout) are filtered when absent.
     cwd = getattr(cfg, "cwd", None) or getattr(cfg, "workspace", None)
-    skill_rail = SkillUseRail(
+    skill_rail = call_with_supported_kwargs(
+        SkillUseRail,
         skills_dir=_default_skill_dirs(cwd=cwd),
         skill_mode="all",
         include_tools=False,
@@ -550,16 +556,19 @@ def create_agent(
     )
 
     if subagents:
-        from openjiuwen_icode.subagents import (
-            load_subagent_concurrency_config,
-        )
-        from openjiuwen.harness.subagents.concurrency import (
-            SubagentConcurrencyLimiter,
-        )
+        _cfg_type, limiter_cls = load_concurrency_types()
+        if limiter_cls is not None:
+            from openjiuwen_icode.subagents import (
+                load_subagent_concurrency_config,
+            )
 
-        agent.subagent_concurrency = SubagentConcurrencyLimiter(
-            load_subagent_concurrency_config()
-        )
+            agent.subagent_concurrency = limiter_cls(
+                load_subagent_concurrency_config()
+            )
+        else:
+            logger.debug(
+                "SubagentConcurrencyLimiter not available; skipping limits"
+            )
 
     # Override workspace root_path to bypass the factory's
     # automatic ``{agent_id}_workspace`` suffix.  This is safe

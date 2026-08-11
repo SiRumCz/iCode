@@ -9,7 +9,7 @@ description = "OpenJiuWen iCode — EventBus coding assistant (CLI / TUI / ACP) 
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "openjiuwen>=0.1.23",
+    "openjiuwen>=0.1.16",
     "click>=8.1.0",
     "prompt-toolkit>=3.0.0",
     "rich>=13.0.0",
