@@ -32,11 +32,16 @@ Settings:
 
 ### Production
 
-1. Command Palette → **iCode: Set API Key**
-2. Optionally set `icode.model` / `icode.apiBase` / `icode.provider`
-3. Open a workspace folder → Activity Bar **iCode** → Chat
+1. Set **`icode.command`** to an absolute path if `icode` is not on the GUI PATH, e.g.  
+   `/Users/you/gitcode/iCode/.venv/bin/icode`
+2. Command Palette → **iCode: Set API Key**
+3. Optionally set `icode.model` / `icode.apiBase` / `icode.provider`
+4. Open a **workspace folder** → Activity Bar **iCode** → Chat
+5. If the agent was already started with a bad path: **iCode: Restart Agent**
 
 `icode.autoApprove` defaults to `false` so the extension can show Allow/Deny for tool confirms (`--no-auto-approve` on the server).
+
+If Output shows `Read-only file system: '/logs'`, upgrade the CLI (log bootstrap) and ensure the extension sets workspace cwd when spawning ACP (fixed in recent builds).
 
 ## Commands
 

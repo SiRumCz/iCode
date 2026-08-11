@@ -31,12 +31,36 @@ def _bootstrap_logging() -> None:
     entry-point is absent, causing a ``RuntimeError`` on the first
     SDK import that touches the logger.  Setting ``_initialized = True``
     lets the SDK fall through to stdlib-backed loggers.
+
+    Also: never let the SDK create ``./logs`` under a read-only cwd
+    (VS Code / Cursor extension hosts often spawn with cwd ``/``).
     """
     try:
         import logging
+        import os
+        from pathlib import Path
 
         if "pytest" in sys.modules:
             return
+
+        # Prefer a writable log root when the process cwd is unusable
+        # (e.g. ``/`` under a GUI extension host).
+        try:
+            cwd = Path.cwd()
+            probe = cwd / ".icode-log-write-probe"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+        except OSError:
+            home = Path(
+                os.environ.get("ICODE_HOME")
+                or (Path.home() / ".icode")
+            )
+            log_root = home / "logs"
+            log_root.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chdir(home)
+            except OSError:
+                pass
 
         # Suppress ALL SDK logs in CLI mode.
         logging.getLogger("openjiuwen").setLevel(logging.CRITICAL)
@@ -70,23 +94,13 @@ def _bootstrap_logging() -> None:
                     lg.handlers.clear()
                     return lg
 
-            _orig = LogMgr.get_logger.__func__
-
             @classmethod  # type: ignore[misc]
             def _safe(cls: type, lt: str = "default") -> object:
-                try:
-                    result = _orig(cls, lt)
-                    # Silence any already-created loggers too
-                    if hasattr(result, "logger"):
-                        real_lg = result.logger()
-                        if hasattr(real_lg, "setLevel"):
-                            real_lg.setLevel(logging.CRITICAL)
-                            real_lg.handlers.clear()
-                    return result
-                except RuntimeError:
-                    if lt not in cls._loggers:
-                        cls._loggers[lt] = _NullLogger(lt)
-                    return cls._loggers[lt]
+                # Always use NullLogger in CLI/ACP — avoid SDK file handlers
+                # that mkdir relative ``./logs`` (fails when cwd is ``/``).
+                if lt not in cls._loggers:
+                    cls._loggers[lt] = _NullLogger(lt)
+                return cls._loggers[lt]
 
             LogMgr.get_logger = _safe  # type: ignore[assignment]
             setattr(LogMgr, "_initialized", True)

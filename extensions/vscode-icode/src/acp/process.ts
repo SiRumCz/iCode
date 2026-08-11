@@ -1,4 +1,5 @@
 import { ChildProcessWithoutNullStreams, spawn } from "child_process";
+import * as os from "os";
 import * as vscode from "vscode";
 import { IcodeConfig } from "../config";
 
@@ -18,11 +19,16 @@ export class AcpProcess {
       return;
     }
     const env = this.config.childEnv(this.apiKey);
+    // Extension hosts often have cwd=/ ; SDK relative ./logs would become /logs.
+    const cwd =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
+      os.homedir();
     this.output.appendLine(
-      `Spawning: ${this.config.command} ${this.config.args.join(" ")}`
+      `Spawning: ${this.config.command} ${this.config.args.join(" ")} (cwd=${cwd})`
     );
     this.child = spawn(this.config.command, this.config.args, {
       env,
+      cwd,
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child.stdout.setEncoding("utf8");
@@ -39,6 +45,7 @@ export class AcpProcess {
     });
     this.child.on("error", (err) => {
       this.output.appendLine(`ACP process error: ${err.message}`);
+      this.child = undefined;
     });
   }
 
