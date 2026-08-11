@@ -21,8 +21,7 @@ def test_build_system() -> None:
 def test_console_scripts() -> None:
     pyproject = _load_pyproject()
     scripts = pyproject["project"]["scripts"]
-    assert scripts["openjiuwen"] == "openjiuwen_icode.cli:cli"
-    assert scripts["icode"] == "openjiuwen_icode.cli:cli"
+    assert scripts == {"icode": "openjiuwen_icode.cli:cli"}
 
 
 def test_depends_on_openjiuwen_sdk() -> None:

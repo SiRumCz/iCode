@@ -917,6 +917,7 @@ def _register_skill_commands(
 ) -> None:
     """Register discovered skills as slash commands."""
     from openjiuwen_icode.skills import load_skills_config
+    from openjiuwen_icode.skills.scan import _read_frontmatter_fields
 
     descs = getattr(_scan_skill_dirs, "_descs", {})
     for name, skill_md in skills.items():
@@ -925,6 +926,14 @@ def _register_skill_commands(
             continue
         SLASH_COMMANDS[cmd] = None
         desc = str(descs.get(name) or "")
+        if not desc:
+            try:
+                desc = (
+                    _read_frontmatter_fields(skill_md).get("description")
+                    or ""
+                ).strip()
+            except OSError:
+                desc = ""
         if len(desc) > 60:
             desc = desc[:57] + "..."
         _SLASH_DESCRIPTIONS[cmd] = desc or "Skill"

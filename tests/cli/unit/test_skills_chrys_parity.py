@@ -20,10 +20,6 @@ from openjiuwen_icode.skills.query import (
     build_inline_skill_query,
     build_skill_query,
 )
-from openjiuwen.harness.tools.skills.script_runner import (
-    SubprocessScriptRunner,
-    resolve_under_skill_dir,
-)
 
 
 def test_collect_default_skill_dirs_includes_chrys_agents(tmp_path: Path) -> None:
@@ -128,17 +124,21 @@ def test_build_inline_skill_query() -> None:
 
 @pytest.mark.asyncio
 async def test_script_runner_path_escape_and_run(tmp_path: Path) -> None:
+    script_runner = pytest.importorskip(
+        "openjiuwen.harness.tools.skills.script_runner",
+        reason="script_runner absent on agent-core icode",
+    )
     skill = tmp_path / "skill"
     scripts = skill / "scripts"
     scripts.mkdir(parents=True)
     script = scripts / "hi.py"
     script.write_text("print('ok')\n", encoding="utf-8")
 
-    assert resolve_under_skill_dir(skill, "../outside.py") is None
-    resolved = resolve_under_skill_dir(skill, "scripts/hi.py")
+    assert script_runner.resolve_under_skill_dir(skill, "../outside.py") is None
+    resolved = script_runner.resolve_under_skill_dir(skill, "scripts/hi.py")
     assert resolved == script.resolve()
 
-    runner = SubprocessScriptRunner(timeout=30)
+    runner = script_runner.SubprocessScriptRunner(timeout=30)
     out = await runner.run(
         skill_dir=skill,
         script_rel="scripts/hi.py",
@@ -150,6 +150,10 @@ async def test_script_runner_path_escape_and_run(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_skill_use_rail_inline_and_script_tool(tmp_path: Path) -> None:
+    pytest.importorskip(
+        "openjiuwen.harness.tools.skills.run_skill_script",
+        reason="RunSkillScriptTool / inline_skills absent on agent-core icode",
+    )
     from openjiuwen.core.runner import Runner
     from openjiuwen.core.sys_operation import (
         LocalWorkConfig,
@@ -157,6 +161,10 @@ async def test_skill_use_rail_inline_and_script_tool(tmp_path: Path) -> None:
         SysOperationCard,
     )
     from openjiuwen.harness.rails.skills.skill_use_rail import SkillUseRail
+    from openjiuwen.harness.tools.skills.skill_tool import SkillTool
+    from openjiuwen.harness.tools.skills.run_skill_script import (
+        RunSkillScriptTool,
+    )
 
     skills_root = tmp_path / "skills"
     skill_dir = skills_root / "pack"
@@ -198,11 +206,6 @@ async def test_skill_use_rail_inline_and_script_tool(tmp_path: Path) -> None:
         names = {s.name for s in rail.skills}
         assert "pack" in names
         assert "inline-one" in names
-
-        from openjiuwen.harness.tools.skills.skill_tool import SkillTool
-        from openjiuwen.harness.tools.skills.run_skill_script import (
-            RunSkillScriptTool,
-        )
 
         skill_tool = SkillTool(
             rail.sys_operation, lambda: rail.skills

@@ -28,7 +28,6 @@ dev = [
 ]
 
 [project.scripts]
-openjiuwen = "openjiuwen_icode.cli:cli"
 icode = "openjiuwen_icode.cli:cli"
 
 [project.urls]

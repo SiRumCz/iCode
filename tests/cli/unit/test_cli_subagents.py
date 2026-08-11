@@ -6,12 +6,11 @@ from __future__ import annotations
 
 import pytest
 
+from openjiuwen_icode.sdk_compat import load_concurrency_types
 from openjiuwen_icode.subagents import build_cli_subagents
-from openjiuwen.harness.subagents.concurrency import (
-    SubagentConcurrencyConfig,
-    SubagentConcurrencyLimiter,
-)
 from openjiuwen.harness.tools.subagent.session_tools import SessionToolkit
+
+SubagentConcurrencyConfig, SubagentConcurrencyLimiter = load_concurrency_types()
 
 
 class _FakeModel:
@@ -40,6 +39,10 @@ def test_build_cli_subagents_chrys_roster() -> None:
     assert names == ["explore_agent", "plan_agent"]
 
 
+@pytest.mark.skipif(
+    SubagentConcurrencyLimiter is None,
+    reason="openjiuwen.harness.subagents.concurrency absent on agent-core icode",
+)
 def test_concurrency_limiter_total_cap() -> None:
     limiter = SubagentConcurrencyLimiter(
         SubagentConcurrencyConfig(max_total=1, per_agent_default=2)
@@ -52,6 +55,10 @@ def test_concurrency_limiter_total_cap() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    SubagentConcurrencyLimiter is None,
+    reason="openjiuwen.harness.subagents.concurrency absent on agent-core icode",
+)
 async def test_concurrency_acquire_release_sync() -> None:
     limiter = SubagentConcurrencyLimiter(
         SubagentConcurrencyConfig(max_total=2, per_agent_default=1)

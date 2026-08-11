@@ -1,6 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Browser-hosted TUI via textual-serve (``openjiuwen serve``).
+"""Browser-hosted TUI via textual-serve (``icode serve``).
 
 Mirrors Chrys ``chrys serve``: each browser tab spawns a Textual TUI process
 bound to EventBus + SessionHost. Stdout of the serve process is the HTTP
@@ -42,8 +42,8 @@ def entrypoint_argv() -> list[str]:
     """Return argv that invokes the OpenJiuWen CLI entrypoint."""
     if _looks_like_python(sys.executable):
         return [sys.executable, "-m", "openjiuwen_icode"]
-    # Installed console script (e.g. ``openjiuwen``).
-    return [sys.argv[0] if sys.argv else "openjiuwen"]
+    # Installed console script (e.g. ``icode``).
+    return [sys.argv[0] if sys.argv else "icode"]
 
 
 def build_tui_command(

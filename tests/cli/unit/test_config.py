@@ -189,11 +189,26 @@ class TestLoadConfig:
         assert cfg.model == "gpt-4o-mini"
 
     def test_load_config_validates(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
         """load_config() calls validate() automatically."""
         monkeypatch.delenv(
             "OPENJIUWEN_API_KEY", raising=False
+        )
+        monkeypatch.delenv(
+            "ICODE_API_KEY", raising=False
+        )
+        monkeypatch.delenv(
+            "OPENJIUWEN_SERVER_URL", raising=False
+        )
+        monkeypatch.delenv(
+            "ICODE_SERVER_URL", raising=False
+        )
+        empty = tmp_path / "settings.json"
+        empty.write_text("{}")
+        monkeypatch.setattr(
+            "openjiuwen_icode.agent.config.SETTINGS_PATH",
+            empty,
         )
         with pytest.raises(ValueError, match="API key"):
             load_config()

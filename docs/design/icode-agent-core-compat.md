@@ -23,7 +23,7 @@ Do **not** port newer harness modules (`tools.subagent.awaiting|control|lifecycl
 ## Develop
 
 ```bash
-# siblings
-cd iCode && uv sync   # uses [tool.uv.sources] → ../agent-core
+cd iCode && uv sync   # [tool.uv.sources] → michaelling/agent-core@icode
 make smoke
+make test
 ```

@@ -17,7 +17,6 @@ from openjiuwen_icode.events import (
     chunk_to_events,
 )
 from openjiuwen_icode.subagents import load_subagent_concurrency_config
-from openjiuwen.harness.tools.subagent.lifecycle import record_subagent_audit
 
 
 class TestSubagentChunkMapping:
@@ -140,8 +139,12 @@ class TestSubagentChunkMapping:
         assert isinstance(end[0], SubAgentToolCallResult)
 
     def test_audit_appends_jsonl(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        lifecycle = pytest.importorskip(
+            "openjiuwen.harness.tools.subagent.lifecycle",
+            reason="tools.subagent.lifecycle absent on agent-core icode",
+        )
         monkeypatch.setenv("ICODE_PROJECT", str(tmp_path / "proj"))
-        record_subagent_audit(
+        lifecycle.record_subagent_audit(
             "parent-1",
             phase="started",
             agent_name="explore_agent",

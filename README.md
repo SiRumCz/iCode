@@ -7,38 +7,40 @@ Terminal coding assistant (CLI / Textual TUI / ACP) built on the
 Repo: [`michaelling/iCode`](https://gitcode.com/michaelling/iCode)
 (PyPI / distribution name remains `openjiuwen-icode`).
 
+This product currently depends on the
+[`michaelling/agent-core`](https://gitcode.com/michaelling/agent-core) fork,
+branch `icode` (not upstream `main` / PyPI alone).
+
 ## Install
 
 ```bash
-# With a published SDK + product wheel:
-pip install openjiuwen-icode
-
-# From this repo (SDK comes from the michaelling/agent-core fork, branch icode):
+# From this repo (resolves openjiuwen from the fork via [tool.uv.sources]):
 cd iCode
-uv sync
+uv sync   # requires SSH access to gitcode.com:michaelling/agent-core
 ```
 
 `[tool.uv.sources]` points `openjiuwen` at
 `ssh://git@gitcode.com/michaelling/agent-core.git` (`branch = "icode"`);
-`uv.lock` pins the resolved commit. For local joint edits of the SDK:
+`uv.lock` pins the resolved commit.
+
+### Local joint debug (SDK + product)
 
 ```bash
-uv add --editable ../agent-core   # do not commit the path override
-```
+# 1. editable override — do not commit the path change
+uv add --editable ../agent-core
 
-After SDK changes land on `origin/icode`, refresh the pin:
+# 2. develop / test against the sibling checkout, then push SDK to origin/icode
 
-```bash
+# 3. restore the git source in pyproject.toml if needed, refresh the team pin:
 uv lock --upgrade-package openjiuwen
+# commit uv.lock (and pyproject.toml only if sources were changed)
 ```
 
 ## Run
 
 ```bash
-icode --help
-# or (same entry point)
-openjiuwen --help
-openjiuwen tui
+uv run icode --help
+uv run icode tui
 ```
 
 ## Layout
@@ -53,7 +55,11 @@ openjiuwen tui
 ## Relationship to agent-core
 
 - **This repo:** product shell only.
-- **agent-core:** `openjiuwen.core` + `openjiuwen.harness` (DeepAgent, tools, rails).
+- **Upstream SDK:** [`openJiuwen/agent-core`](https://gitcode.com/openJiuwen/agent-core)
+  (`openjiuwen.core` + `openjiuwen.harness`).
+- **Dev dependency:** fork
+  [`michaelling/agent-core`](https://gitcode.com/michaelling/agent-core)
+  on branch `icode`, declared in `[tool.uv.sources]` and pinned in `uv.lock`.
 - Supported SDK import surface: `docs/design/icode-sdk-api-surface.md`.
 - Compatibility: `openjiuwen.harness.cli` in agent-core is a deprecated
   shim that re-exports this package when installed.

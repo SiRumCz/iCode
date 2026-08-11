@@ -8,12 +8,6 @@ import pytest
 
 from openjiuwen.core.session.stream.base import OutputSchema
 from openjiuwen_icode.events import SubAgentRetryAttempt, chunk_to_events
-from openjiuwen.harness.tools.subagent import auto_retry as auto_retry_mod
-from openjiuwen.harness.tools.subagent.auto_retry import (
-    is_retryable_subagent_error,
-    load_subagent_max_retries,
-    run_with_subagent_retries,
-)
 
 
 def test_maps_retry_attempt_chunk() -> None:
@@ -42,16 +36,24 @@ def test_maps_retry_attempt_chunk() -> None:
 
 
 def test_non_retryable_concurrency() -> None:
-    assert not is_retryable_subagent_error(
+    auto_retry = pytest.importorskip(
+        "openjiuwen.harness.tools.subagent.auto_retry",
+        reason="auto_retry absent on agent-core icode",
+    )
+    assert not auto_retry.is_retryable_subagent_error(
         RuntimeError("Sub-agent concurrency limit reached")
     )
-    assert is_retryable_subagent_error(TimeoutError("stream stalled"))
+    assert auto_retry.is_retryable_subagent_error(TimeoutError("stream stalled"))
 
 
 @pytest.mark.asyncio
 async def test_run_with_retries_succeeds_after_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    auto_retry_mod = pytest.importorskip(
+        "openjiuwen.harness.tools.subagent.auto_retry",
+        reason="auto_retry absent on agent-core icode",
+    )
     monkeypatch.setenv("OPENJIUWEN_SUBAGENT_MAX_RETRIES", "2")
     calls = {"n": 0}
     sleeps: list[float] = []
@@ -67,7 +69,7 @@ async def test_run_with_retries_succeeds_after_fail(
             raise TimeoutError("transient")
         return "ok"
 
-    result = await run_with_subagent_retries(
+    result = await auto_retry_mod.run_with_subagent_retries(
         _invoke,
         session=None,
         agent_name="explore_agent",
@@ -83,6 +85,11 @@ async def test_run_with_retries_succeeds_after_fail(
 async def test_run_with_retries_exhausted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    auto_retry_mod = pytest.importorskip(
+        "openjiuwen.harness.tools.subagent.auto_retry",
+        reason="auto_retry absent on agent-core icode",
+    )
+
     async def _fake_sleep(_delay: float) -> None:
         return None
 
@@ -92,7 +99,7 @@ async def test_run_with_retries_exhausted(
         raise TimeoutError("always")
 
     with pytest.raises(TimeoutError):
-        await run_with_subagent_retries(
+        await auto_retry_mod.run_with_subagent_retries(
             _invoke,
             session=None,
             agent_name="plan_agent",
@@ -102,5 +109,9 @@ async def test_run_with_retries_exhausted(
 
 
 def test_load_max_retries_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    auto_retry = pytest.importorskip(
+        "openjiuwen.harness.tools.subagent.auto_retry",
+        reason="auto_retry absent on agent-core icode",
+    )
     monkeypatch.setenv("OPENJIUWEN_SUBAGENT_MAX_RETRIES", "5")
-    assert load_subagent_max_retries() == 5
+    assert auto_retry.load_subagent_max_retries() == 5

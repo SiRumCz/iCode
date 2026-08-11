@@ -158,7 +158,7 @@ def parse_acp_transport(profile: dict[str, Any] | None) -> AcpClientConfig | Non
         return None
     if not isinstance(block, dict):
         block = {}
-    command = str(block.get("command") or "openjiuwen").strip()
+    command = str(block.get("command") or "icode").strip()
     args_raw = block.get("args")
     if isinstance(args_raw, list):
         args = [str(a) for a in args_raw]

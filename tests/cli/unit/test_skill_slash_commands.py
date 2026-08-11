@@ -72,9 +72,8 @@ class TestScanSkillDirs:
     ) -> None:
         """Non-existent dirs are skipped silently."""
         monkeypatch.setattr(
-            "openjiuwen_icode.ui.repl"
-            "._DEFAULT_SKILL_DIRS",
-            [str(tmp_path / "missing")],
+            "openjiuwen_icode.skills.collect_default_skill_dirs",
+            lambda **_kwargs: [str(tmp_path / "missing")],
         )
         result = _scan_skill_dirs()
         assert result == {}
@@ -88,9 +87,8 @@ class TestScanSkillDirs:
         _write_skill(high, "dup-skill", "High version")
         _write_skill(low, "dup-skill", "Low version")
         monkeypatch.setattr(
-            "openjiuwen_icode.ui.repl"
-            "._DEFAULT_SKILL_DIRS",
-            [str(high), str(low)],
+            "openjiuwen_icode.skills.collect_default_skill_dirs",
+            lambda **_kwargs: [str(high), str(low)],
         )
         result = _scan_skill_dirs()
         assert "dup-skill" in result
