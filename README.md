@@ -67,13 +67,39 @@ uv run icode tui
 ## Tests
 
 ```bash
-make test
-# or
-uv run pytest tests/cli/unit -q
+make test                 # unit tests
+make test-report          # unit tests + HTML + coverage
+make test-all             # unit + integration + e2e + HTML + coverage
+make test-e2e-smoke       # no-LLM CLI/TUI smoke only
+make test-e2e-llm         # real LLM e2e (needs ICODE_E2E_API_KEY)
 ```
+
+`make test-all` writes:
+
+- `reports/test-report.html` — pytest HTML (includes coverage summary + link)
+- `reports/coverage/index.html` — line coverage detail
+
+LLM e2e cases inside `test-all` **skip** (with a reminder) when `ICODE_E2E_API_KEY` is unset.
+
+### LLM e2e credentials
+
+Use a **dedicated** test key (do not rely on interactive `OPENLUX_TOKEN` unless you export it into the test var):
+
+```bash
+export ICODE_E2E_API_KEY=sk-...   # required for -m llm
+# optional:
+export ICODE_E2E_MODEL=deepseek-v4-pro          # preset id (default)
+export ICODE_E2E_MODELS=all                     # or comma-separated presets
+# export ICODE_E2E_API_KEY_OPENAI=...           # for openai-gpt-4o preset
+```
+
+Presets live in `tests/cli/e2e/models.yaml` (OpenLux `deepseek-v4-pro` by default).
+If `ICODE_E2E_API_KEY` (or a preset’s `api_key_env`) is unset, LLM tests are **skipped** with a reminder.
 
 ## Smoke (SDK import)
 
 ```bash
+make smoke
+# or
 uv run python -c "from openjiuwen.harness import create_deep_agent; from openjiuwen_icode import __version__; print(__version__)"
 ```

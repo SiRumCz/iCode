@@ -1,4 +1,6 @@
-"""E2E-03 / E2E-04: ``--output-format json`` and ``stream-json``."""
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""E2E-03 / E2E-04: ``--output-format json`` and ``stream-json`` (LLM)."""
 
 from __future__ import annotations
 
@@ -6,29 +8,32 @@ import json
 
 import pytest
 
-from tests.cli.e2e.conftest import run_cli
+from tests.cli.e2e.conftest import ModelPreset, run_cli
 
 
-@pytest.mark.skip(reason="E2E test requires real LLM API credentials")
-def test_run_json_format() -> None:
-    """``-f json`` produces a valid JSON object with result."""
+pytestmark = pytest.mark.llm
+
+
+def test_run_json_format(
+    model_preset: ModelPreset, llm_env: dict[str, str]
+) -> None:
     result = run_cli(
-        "run", "-f", "json", "What is 2+2?"
+        "run", "-f", "json", "What is 2+2?", env=llm_env
     )
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
     assert "result" in data and len(data["result"]) > 0
     assert isinstance(data["chunks"], int) and data["chunks"] > 0
     assert "model" in data
 
 
-@pytest.mark.skip(reason="E2E test requires real LLM API credentials")
-def test_run_stream_json_format() -> None:
-    """``-f stream-json`` outputs valid JSONL lines."""
+def test_run_stream_json_format(
+    model_preset: ModelPreset, llm_env: dict[str, str]
+) -> None:
     result = run_cli(
-        "run", "-f", "stream-json", "Say hello"
+        "run", "-f", "stream-json", "Say hello", env=llm_env
     )
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stderr
     lines = [
         line
         for line in result.stdout.strip().split("\n")
@@ -36,20 +41,14 @@ def test_run_stream_json_format() -> None:
     ]
     assert len(lines) >= 1
 
-    valid_types = {
-        "llm_output",
-        "llm_reasoning",
-        "answer",
-        "message",
-        "__interaction__",
-        "controller_output",
-    }
-    has_content = False
+    # EventBus JSONL: one object per event (see host.bus_runner.event_to_dict).
+    types: set[str] = set()
     for line in lines:
         data = json.loads(line)
         assert "type" in data
-        assert "index" in data
-        assert data["type"] in valid_types
-        if data["type"] in ("llm_output", "answer"):
-            has_content = True
-    assert has_content
+        assert "event_id" in data
+        assert "timestamp" in data
+        types.add(data["type"])
+    assert "TurnStarted" in types
+    assert "TurnFinished" in types or "TurnFailed" in types
+    assert "AgentMessage" in types

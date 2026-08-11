@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 htmlcov/
 report/
 reports/
@@ -15,3 +16,4 @@ build/
 .agent_history/
 logs/
 auto_harness/
+directories.json

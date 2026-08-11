@@ -19,6 +19,11 @@ from unittest.mock import patch
 
 import pytest
 
+pytest.importorskip(
+    "openjiuwen.auto_harness.schema",
+    reason="openjiuwen.auto_harness not available on this SDK build",
+)
+
 from openjiuwen.auto_harness.schema import (
     AutoHarnessConfig,
     load_auto_harness_config,
@@ -551,8 +556,15 @@ class TestSubcmdRunIntegration:
 # ------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="需要真实 LLM API 和 GITCODE_ACCESS_TOKEN",
+@pytest.mark.skipif(
+    not (
+        os.getenv("ICODE_E2E_API_KEY", "").strip()
+        and os.getenv("GITCODE_ACCESS_TOKEN", "").strip()
+    ),
+    reason=(
+        "Set ICODE_E2E_API_KEY and GITCODE_ACCESS_TOKEN "
+        "to run auto-harness optimization e2e"
+    ),
 )
 class TestAutoHarnessOptimizationScenarios:
     """auto-harness 真实优化场景 E2E 测试。
@@ -562,7 +574,7 @@ class TestAutoHarnessOptimizationScenarios:
     通过 CI 门禁后提交 PR。
 
     需要环境变量：
-    - OPENJIUWEN_API_KEY / OPENJIUWEN_API_BASE
+    - ICODE_E2E_API_KEY（测试专用）
     - GITCODE_ACCESS_TOKEN
     """
 
