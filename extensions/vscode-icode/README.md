@@ -63,6 +63,7 @@ If Output shows `Read-only file system: '/logs'`, upgrade the CLI (log bootstrap
 | iCode: Restart Agent | Kill ACP child |
 | iCode: Set API Key | SecretStorage |
 | iCode: Attach Active File / Selection | Context for next prompt |
+| Add Selection to Chat | Editor context menu (selection) → attach + focus chat |
 | iCode: Show Latest Diff | `session/diff` → VS Code diff editors |
 | iCode: Refresh Sessions | `session/list` |
 | iCode: Delete Session | Confirm then `session/delete` (trash icon / context menu) |

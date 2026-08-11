@@ -29,6 +29,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     onCancel: () => void cancelPrompt(),
     onApprove: (interactionId, approved) =>
       void approvePermission(interactionId, approved),
+    onClearAttachment: () => clearAttachment(),
   });
 
   sessions = new SessionsTreeProvider(() => listSessions());
@@ -61,7 +62,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("icode.restartAgent", () => void restartAgent()),
     vscode.commands.registerCommand("icode.setApiKey", () => void setApiKey()),
     vscode.commands.registerCommand("icode.showDiff", () => void showDiff()),
-    vscode.commands.registerCommand("icode.attachActiveFile", () => attachActiveFile()),
+    vscode.commands.registerCommand("icode.attachActiveFile", () =>
+      void attachActiveFile()
+    ),
+    vscode.commands.registerCommand("icode.addSelectionToChat", () =>
+      void addSelectionToChat()
+    ),
     vscode.commands.registerCommand("icode.refreshSessions", () => sessions.refresh()),
     vscode.commands.registerCommand(
       "icode.loadSession",
@@ -92,23 +98,84 @@ async function setApiKey(): Promise<void> {
   await restartAgent();
 }
 
-function attachActiveFile(): void {
+function clearAttachment(): void {
+  attachedContext = undefined;
+  chat.setAttachment(undefined);
+}
+
+function fenceLang(languageId: string): string {
+  switch (languageId) {
+    case "typescriptreact":
+      return "tsx";
+    case "javascriptreact":
+      return "jsx";
+    case "shellscript":
+      return "bash";
+    case "jsonc":
+      return "json";
+    default:
+      return languageId || "";
+  }
+}
+
+function setEditorAttachment(
+  doc: vscode.TextDocument,
+  selection: vscode.Selection | undefined,
+  text: string,
+  selectionOnly: boolean
+): void {
+  const clipped = text.length > 60_000 ? `${text.slice(0, 60_000)}\n…` : text;
+  const path = vscode.workspace.asRelativePath(doc.uri);
+  const hasSelection = Boolean(selection && !selection.isEmpty);
+  let range = "";
+  if (hasSelection && selection) {
+    const start = selection.start.line + 1;
+    const end = selection.end.line + 1;
+    range = start === end ? `:${start}` : `:${start}-${end}`;
+  }
+  const lang = fenceLang(doc.languageId);
+  attachedContext = `[Attached: ${path}${range}]\n\`\`\`${lang}\n${clipped}\n\`\`\``;
+  const label = hasSelection
+    ? `${path}${range} (selection)`
+    : `${path} (file)`;
+  chat.setAttachment(label);
+  if (!selectionOnly) {
+    chat.postSystem(`Attached ${label}.`);
+  }
+}
+
+async function focusChat(): Promise<void> {
+  await vscode.commands.executeCommand("icode.chatView.focus");
+}
+
+async function addSelectionToChat(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.selection.isEmpty) {
+    vscode.window.showWarningMessage("Select text in the editor first.");
+    return;
+  }
+  const text = editor.document.getText(editor.selection);
+  if (!text.trim()) {
+    vscode.window.showWarningMessage("Selection is empty.");
+    return;
+  }
+  setEditorAttachment(editor.document, editor.selection, text, true);
+  await focusChat();
+}
+
+async function attachActiveFile(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
     vscode.window.showWarningMessage("No active editor to attach.");
     return;
   }
-  const doc = editor.document;
   const selection = editor.selection;
-  const selected =
-    selection && !selection.isEmpty ? doc.getText(selection) : doc.getText();
-  const path = doc.uri.fsPath;
-  const clipped =
-    selected.length > 60_000 ? `${selected.slice(0, 60_000)}\n…` : selected;
-  attachedContext = `[Attached: ${path}]\n\`\`\`\n${clipped}\n\`\`\``;
-  chat.postSystem(
-    `Attached ${path}${selection && !selection.isEmpty ? " (selection)" : ""}.`
-  );
+  const text =
+    selection && !selection.isEmpty
+      ? editor.document.getText(selection)
+      : editor.document.getText();
+  setEditorAttachment(editor.document, selection, text, false);
+  await focusChat();
 }
 
 async function ensureClient(): Promise<AcpClient> {
@@ -314,7 +381,7 @@ async function sendPrompt(text: string): Promise<void> {
     ];
     if (attachedContext) {
       promptBlocks.unshift({ type: "text", text: attachedContext });
-      attachedContext = undefined;
+      clearAttachment();
     }
     const cwd = await workspaceCwd();
     const result = (await c.request("session/prompt", {

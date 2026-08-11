@@ -2,7 +2,7 @@
   "name": "icode",
   "displayName": "iCode",
   "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "openjiuwen",
   "license": "Apache-2.0",
   "repository": {
@@ -31,6 +31,7 @@
     "onCommand:icode.setApiKey",
     "onCommand:icode.showDiff",
     "onCommand:icode.attachActiveFile",
+    "onCommand:icode.addSelectionToChat",
     "onCommand:icode.deleteSession",
     "onCommand:icode.loadSession"
   ],
@@ -86,6 +87,12 @@
         "title": "iCode: Attach Active File / Selection"
       },
       {
+        "command": "icode.addSelectionToChat",
+        "title": "Add Selection to Chat",
+        "category": "iCode",
+        "icon": "$(add)"
+      },
+      {
         "command": "icode.refreshSessions",
         "title": "iCode: Refresh Sessions",
         "icon": "$(refresh)"
@@ -101,6 +108,13 @@
       }
     ],
     "menus": {
+      "editor/context": [
+        {
+          "command": "icode.addSelectionToChat",
+          "when": "editorHasSelection",
+          "group": "0_icode@1"
+        }
+      ],
       "view/title": [
         {
           "command": "icode.newSession",

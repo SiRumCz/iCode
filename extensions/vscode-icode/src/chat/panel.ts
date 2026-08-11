@@ -5,6 +5,7 @@ export interface ChatHandlers {
   onSend: (text: string) => void;
   onCancel: () => void;
   onApprove: (interactionId: string, approved: boolean) => void;
+  onClearAttachment?: () => void;
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -44,6 +45,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.handlers.onCancel();
         } else if (msg.type === "approve" && msg.interactionId) {
           this.handlers.onApprove(msg.interactionId, Boolean(msg.approved));
+        } else if (msg.type === "clearAttachment") {
+          this.handlers.onClearAttachment?.();
         }
       }
     );
@@ -129,6 +132,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "busy", busy });
   }
 
+  /** Show or clear the pending editor attachment chip above the composer. */
+  setAttachment(label: string | undefined): void {
+    this.post({ type: "attachment", label: label ?? "" });
+  }
+
   private post(message: Record<string, unknown>): void {
     void this.view?.webview.postMessage(message);
   }
@@ -199,6 +207,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     .thought .label { font-style: normal; opacity: 0.8; margin-bottom: 4px; display: block; }
     .permission { border: 1px solid var(--vscode-inputValidation-warningBorder, orange); padding: 8px; border-radius: 6px; }
     #composer { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    #attach {
+      display: none; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px;
+      background: var(--vscode-badge-background, rgba(128,128,128,.25));
+      color: var(--vscode-badge-foreground, inherit); font-size: 0.85em;
+    }
+    #attach.visible { display: flex; }
+    #attachLabel { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #attachClear { padding: 2px 8px; min-width: auto; }
     #hint { font-size: 0.8em; opacity: 0.7; }
     textarea { width: 100%; min-height: 56px; resize: vertical; box-sizing: border-box;
       background: var(--vscode-input-background); color: var(--vscode-input-foreground);
@@ -213,6 +229,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <body>
   <div id="log"></div>
   <div id="composer">
+    <div id="attach">
+      <span id="attachLabel"></span>
+      <button id="attachClear" class="secondary" title="Remove attachment">×</button>
+    </div>
     <textarea id="input" placeholder="Message iCode…"></textarea>
     <div class="row">
       <button id="send">Send</button>
@@ -229,13 +249,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const sendBtn = document.getElementById('send');
     const cancelBtn = document.getElementById('cancel');
     const hint = document.getElementById('hint');
+    const attachEl = document.getElementById('attach');
+    const attachLabel = document.getElementById('attachLabel');
+    const attachClear = document.getElementById('attachClear');
     let assistantEl = null;
     let thoughtBody = null;
     let submitKeybinding = ${JSON.stringify(initial)};
+    let imeComposing = false;
+    let suppressEnterUntil = 0;
 
     if (typeof marked !== 'undefined' && marked.setOptions) {
       marked.setOptions({ gfm: true, breaks: true });
     }
+
+    function showAttachment(label) {
+      if (!attachEl || !attachLabel) return;
+      if (label) {
+        attachLabel.textContent = 'Attached: ' + label;
+        attachEl.classList.add('visible');
+      } else {
+        attachLabel.textContent = '';
+        attachEl.classList.remove('visible');
+      }
+    }
+    attachClear.addEventListener('click', () => {
+      showAttachment('');
+      vscode.postMessage({ type: 'clearAttachment' });
+    });
 
     function isMac() {
       return navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -251,6 +291,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
     updateHint();
+
+    function isImeEnter(e) {
+      // Chinese/Japanese IME: Enter confirms a candidate, must not send.
+      // keyCode 229 = "Processing" during composition on many engines.
+      if (imeComposing || e.isComposing || e.keyCode === 229) return true;
+      if (Date.now() < suppressEnterUntil) return true;
+      return false;
+    }
+
+    input.addEventListener('compositionstart', () => {
+      imeComposing = true;
+    });
+    input.addEventListener('compositionend', () => {
+      imeComposing = false;
+      // Same Enter that commits the candidate may fire after compositionend
+      // with isComposing=false — ignore it briefly.
+      suppressEnterUntil = Date.now() + 200;
+    });
 
     function renderMd(text) {
       const raw = text || '';
@@ -304,6 +362,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     cancelBtn.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
     input.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
+      if (isImeEnter(e)) return;
       if (submitKeybinding === 'enter') {
         if (e.shiftKey) return;
         e.preventDefault();
@@ -329,11 +388,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           log.innerHTML = '';
           assistantEl = null;
           thoughtBody = null;
+          showAttachment('');
+          break;
+        case 'attachment':
+          showAttachment(msg.label || '');
           break;
         case 'history': {
           log.innerHTML = '';
           assistantEl = null;
           thoughtBody = null;
+          showAttachment('');
           const items = Array.isArray(msg.messages) ? msg.messages : [];
           for (const m of items) {
             const role = (m.role || '').toLowerCase();
