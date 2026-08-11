@@ -7,6 +7,7 @@ name = "openjiuwen-icode"
 version = "0.1.0"
 description = "OpenJiuWen iCode — EventBus coding assistant (CLI / TUI / ACP) on the openjiuwen SDK"
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "openjiuwen>=0.1.16",

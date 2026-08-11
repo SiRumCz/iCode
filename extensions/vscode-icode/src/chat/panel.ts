@@ -10,6 +10,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "icode.chatView";
   private view?: vscode.WebviewView;
   private assistantOpen = false;
+  private thoughtOpen = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -27,29 +28,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this.extensionUri],
     };
     webviewView.webview.html = this.html(webviewView.webview);
-    webviewView.webview.onDidReceiveMessage((msg: { type?: string; text?: string; interactionId?: string; approved?: boolean }) => {
-      if (msg.type === "send" && msg.text) {
-        this.assistantOpen = false;
-        this.handlers.onSend(msg.text);
-      } else if (msg.type === "cancel") {
-        this.handlers.onCancel();
-      } else if (msg.type === "approve" && msg.interactionId) {
-        this.handlers.onApprove(msg.interactionId, Boolean(msg.approved));
+    webviewView.webview.onDidReceiveMessage(
+      (msg: {
+        type?: string;
+        text?: string;
+        interactionId?: string;
+        approved?: boolean;
+      }) => {
+        if (msg.type === "send" && msg.text) {
+          this.assistantOpen = false;
+          this.thoughtOpen = false;
+          this.handlers.onSend(msg.text);
+        } else if (msg.type === "cancel") {
+          this.handlers.onCancel();
+        } else if (msg.type === "approve" && msg.interactionId) {
+          this.handlers.onApprove(msg.interactionId, Boolean(msg.approved));
+        }
       }
-    });
+    );
   }
 
   clear(): void {
     this.assistantOpen = false;
+    this.thoughtOpen = false;
     this.post({ type: "clear" });
   }
 
   postUser(text: string): void {
     this.assistantOpen = false;
+    this.thoughtOpen = false;
     this.post({ type: "user", text });
   }
 
   appendAssistant(text: string): void {
+    // Reply starts → close the thinking stream bubble.
+    this.thoughtOpen = false;
     if (!this.assistantOpen) {
       this.post({ type: "assistantStart" });
       this.assistantOpen = true;
@@ -58,21 +71,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   appendThought(text: string): void {
-    this.post({ type: "thought", text });
+    if (!this.thoughtOpen) {
+      this.post({ type: "thoughtStart" });
+      this.thoughtOpen = true;
+    }
+    this.post({ type: "thoughtChunk", text });
   }
 
   postSystem(text: string): void {
     this.assistantOpen = false;
+    this.thoughtOpen = false;
     this.post({ type: "system", text });
   }
 
   postTool(title: string, detail: string): void {
     this.assistantOpen = false;
+    this.thoughtOpen = false;
     this.post({ type: "tool", title, detail });
   }
 
   postPermission(interactionId: string, message: string): void {
     this.assistantOpen = false;
+    this.thoughtOpen = false;
     this.post({ type: "permission", interactionId, message });
   }
 
@@ -104,7 +124,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     .msg { padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
     .user { background: var(--vscode-inputValidation-infoBackground, rgba(0,120,212,.15)); }
     .assistant { background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,.15)); }
-    .system, .thought, .tool { opacity: 0.85; font-size: 0.9em; }
+    .system, .tool { opacity: 0.85; font-size: 0.9em; }
+    .thought { opacity: 0.65; font-size: 0.85em; font-style: italic;
+      border-left: 2px solid var(--vscode-descriptionForeground, #888); padding-left: 8px; }
+    .thought .label { font-style: normal; opacity: 0.8; margin-bottom: 4px; display: block; }
     .permission { border: 1px solid var(--vscode-inputValidation-warningBorder, orange); padding: 8px; border-radius: 6px; }
     #composer { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
     textarea { width: 100%; min-height: 56px; resize: vertical; box-sizing: border-box;
@@ -133,6 +156,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const sendBtn = document.getElementById('send');
     const cancelBtn = document.getElementById('cancel');
     let assistantEl = null;
+    let thoughtBody = null;
 
     function add(cls, text) {
       const el = document.createElement('div');
@@ -162,12 +186,45 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'clear':
           log.innerHTML = '';
           assistantEl = null;
+          thoughtBody = null;
           break;
         case 'user':
           assistantEl = null;
+          thoughtBody = null;
           add('user', msg.text || '');
           break;
+        case 'thoughtStart': {
+          assistantEl = null;
+          const wrap = document.createElement('div');
+          wrap.className = 'msg thought';
+          const label = document.createElement('span');
+          label.className = 'label';
+          label.textContent = 'Thinking';
+          thoughtBody = document.createElement('div');
+          wrap.appendChild(label);
+          wrap.appendChild(thoughtBody);
+          log.appendChild(wrap);
+          log.scrollTop = log.scrollHeight;
+          break;
+        }
+        case 'thoughtChunk':
+          if (!thoughtBody) {
+            // Late chunk without start — open a bubble.
+            const wrap = document.createElement('div');
+            wrap.className = 'msg thought';
+            const label = document.createElement('span');
+            label.className = 'label';
+            label.textContent = 'Thinking';
+            thoughtBody = document.createElement('div');
+            wrap.appendChild(label);
+            wrap.appendChild(thoughtBody);
+            log.appendChild(wrap);
+          }
+          thoughtBody.textContent += msg.text || '';
+          log.scrollTop = log.scrollHeight;
+          break;
         case 'assistantStart':
+          thoughtBody = null;
           assistantEl = add('assistant', '');
           break;
         case 'assistantChunk':
@@ -175,19 +232,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           assistantEl.textContent += msg.text || '';
           log.scrollTop = log.scrollHeight;
           break;
-        case 'thought':
-          add('thought', '💭 ' + (msg.text || ''));
-          break;
         case 'system':
           assistantEl = null;
+          thoughtBody = null;
           add('system', msg.text || '');
           break;
         case 'tool':
           assistantEl = null;
+          thoughtBody = null;
           add('tool', (msg.title || '') + (msg.detail ? '\\n' + msg.detail : ''));
           break;
         case 'permission': {
           assistantEl = null;
+          thoughtBody = null;
           const wrap = document.createElement('div');
           wrap.className = 'permission';
           wrap.textContent = msg.message || 'Permission required';
