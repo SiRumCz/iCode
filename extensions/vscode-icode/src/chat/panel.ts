@@ -135,6 +135,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private html(webview: vscode.Webview): string {
     const initial: SubmitKeybinding = readSubmitKeybinding();
+    const markedUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "marked.umd.js")
+    );
+    const purifyUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "purify.min.js")
+    );
     const csp = [
       "default-src 'none'",
       `style-src ${webview.cspSource} 'unsafe-inline'`,
@@ -151,9 +157,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     :root { color-scheme: light dark; }
     body { font-family: var(--vscode-font-family); margin: 0; padding: 8px; color: var(--vscode-foreground); }
     #log { height: calc(100vh - 110px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-    .msg { padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+    .msg { padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
     .user { background: var(--vscode-inputValidation-infoBackground, rgba(0,120,212,.15)); }
     .assistant { background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,.15)); }
+    .msg.md { white-space: normal; }
+    .msg.md > :first-child { margin-top: 0; }
+    .msg.md > :last-child { margin-bottom: 0; }
+    .msg.md p, .msg.md ul, .msg.md ol, .msg.md pre, .msg.md blockquote, .msg.md table { margin: 0.55em 0; }
+    .msg.md h1, .msg.md h2, .msg.md h3, .msg.md h4 { margin: 0.7em 0 0.35em; line-height: 1.25; font-weight: 600; }
+    .msg.md h1 { font-size: 1.25em; }
+    .msg.md h2 { font-size: 1.15em; }
+    .msg.md h3 { font-size: 1.05em; }
+    .msg.md ul, .msg.md ol { padding-left: 1.4em; }
+    .msg.md a { color: var(--vscode-textLink-foreground); }
+    .msg.md code {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 0.92em;
+      background: var(--vscode-textCodeBlock-background, rgba(127,127,127,.2));
+      padding: 0.1em 0.35em; border-radius: 3px;
+    }
+    .msg.md pre {
+      overflow-x: auto; padding: 8px 10px; border-radius: 4px;
+      background: var(--vscode-textCodeBlock-background, rgba(127,127,127,.2));
+    }
+    .msg.md pre code { background: transparent; padding: 0; font-size: 0.88em; }
+    .msg.md blockquote {
+      margin-left: 0; padding-left: 0.8em;
+      border-left: 3px solid var(--vscode-descriptionForeground, #888);
+      opacity: 0.9;
+    }
+    .msg.md table { border-collapse: collapse; width: 100%; display: block; overflow-x: auto; }
+    .msg.md th, .msg.md td {
+      border: 1px solid var(--vscode-panel-border, rgba(128,128,128,.45));
+      padding: 4px 8px; text-align: left;
+    }
+    .msg.md th { background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,.2)); font-weight: 600; }
+    .msg.md hr { border: none; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.45)); margin: 0.8em 0; }
     .system, .tool { opacity: 0.85; font-size: 0.9em; }
     .thought { opacity: 0.65; font-size: 0.85em; font-style: italic;
       border-left: 2px solid var(--vscode-descriptionForeground, #888); padding-left: 8px; }
@@ -181,6 +220,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <span id="hint"></span>
     </div>
   </div>
+  <script src="${markedUri}"></script>
+  <script src="${purifyUri}"></script>
   <script>
     const vscode = acquireVsCodeApi();
     const log = document.getElementById('log');
@@ -191,6 +232,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     let assistantEl = null;
     let thoughtBody = null;
     let submitKeybinding = ${JSON.stringify(initial)};
+
+    if (typeof marked !== 'undefined' && marked.setOptions) {
+      marked.setOptions({ gfm: true, breaks: true });
+    }
 
     function isMac() {
       return navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -207,10 +252,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     updateHint();
 
-    function add(cls, text) {
+    function renderMd(text) {
+      const raw = text || '';
+      try {
+        if (typeof marked === 'undefined') return escapeHtml(raw);
+        const parse = marked.parse || marked;
+        const html = parse(raw, { async: false });
+        if (typeof DOMPurify !== 'undefined') {
+          return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+        }
+        return html;
+      } catch (err) {
+        return escapeHtml(raw);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function setMarkdown(el, text) {
+      el.dataset.raw = text || '';
+      el.classList.add('md');
+      el.innerHTML = renderMd(el.dataset.raw);
+    }
+
+    function appendMarkdown(el, chunk) {
+      setMarkdown(el, (el.dataset.raw || '') + (chunk || ''));
+    }
+
+    function add(cls, text, asMarkdown) {
       const el = document.createElement('div');
       el.className = 'msg ' + cls;
-      el.textContent = text;
+      if (asMarkdown) setMarkdown(el, text || '');
+      else el.textContent = text || '';
       log.appendChild(el);
       log.scrollTop = log.scrollHeight;
       return el;
@@ -260,21 +339,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             const role = (m.role || '').toLowerCase();
             const content = m.content || '';
             if (!content) continue;
-            if (role === 'user') add('user', content);
-            else if (role === 'assistant' || role === 'system') add(role === 'system' ? 'system' : 'assistant', content);
-            else add('system', content);
+            if (role === 'user') add('user', content, false);
+            else if (role === 'assistant') add('assistant', content, true);
+            else if (role === 'system') add('system', content, false);
+            else add('system', content, false);
           }
           break;
         }
         case 'user':
           assistantEl = null;
           thoughtBody = null;
-          add('user', msg.text || '');
+          add('user', msg.text || '', false);
           break;
         case 'assistant':
           assistantEl = null;
           thoughtBody = null;
-          add('assistant', msg.text || '');
+          add('assistant', msg.text || '', true);
           break;
         case 'thoughtStart': {
           assistantEl = null;
@@ -307,22 +387,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
         case 'assistantStart':
           thoughtBody = null;
-          assistantEl = add('assistant', '');
+          assistantEl = add('assistant', '', true);
           break;
         case 'assistantChunk':
-          if (!assistantEl) assistantEl = add('assistant', '');
-          assistantEl.textContent += msg.text || '';
+          if (!assistantEl) assistantEl = add('assistant', '', true);
+          appendMarkdown(assistantEl, msg.text || '');
           log.scrollTop = log.scrollHeight;
           break;
         case 'system':
           assistantEl = null;
           thoughtBody = null;
-          add('system', msg.text || '');
+          add('system', msg.text || '', false);
           break;
         case 'tool':
           assistantEl = null;
           thoughtBody = null;
-          add('tool', (msg.title || '') + (msg.detail ? '\\n' + msg.detail : ''));
+          add('tool', (msg.title || '') + (msg.detail ? '\\n' + msg.detail : ''), false);
           break;
         case 'permission': {
           assistantEl = null;

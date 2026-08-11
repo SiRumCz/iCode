@@ -2,7 +2,7 @@
   "name": "icode",
   "displayName": "iCode",
   "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "openjiuwen",
   "license": "Apache-2.0",
   "repository": {
@@ -136,13 +136,19 @@
         },
         "icode.args": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["acp"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "acp"
+          ],
           "description": "Arguments appended after the command (e.g. [\"acp\",\"--demo\"])."
         },
         "icode.env": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "default": {},
           "description": "Extra environment variables for the ACP child process."
         },
@@ -183,7 +189,10 @@
         },
         "icode.submitKeybinding": {
           "type": "string",
-          "enum": ["modifierEnter", "enter"],
+          "enum": [
+            "modifierEnter",
+            "enter"
+          ],
           "enumDescriptions": [
             "Cmd+Enter (macOS) / Ctrl+Enter (Windows, Linux) to send; Enter inserts a newline",
             "Enter to send; Shift+Enter inserts a newline"
@@ -203,19 +212,25 @@
             "id": "installCli",
             "title": "Install the iCode CLI",
             "description": "Ensure ``icode`` is on your PATH (``uv sync`` / ``pip install openjiuwen-icode``).",
-            "media": { "markdown": "media/walkthrough-cli.md" }
+            "media": {
+              "markdown": "media/walkthrough-cli.md"
+            }
           },
           {
             "id": "setKey",
             "title": "Set your API key",
             "description": "Run **iCode: Set API Key** (stored in SecretStorage).",
-            "media": { "markdown": "media/walkthrough-key.md" }
+            "media": {
+              "markdown": "media/walkthrough-key.md"
+            }
           },
           {
             "id": "openChat",
             "title": "Open Chat",
             "description": "Click the iCode icon in the Activity Bar and send a prompt.",
-            "media": { "markdown": "media/walkthrough-chat.md" }
+            "media": {
+              "markdown": "media/walkthrough-chat.md"
+            }
           }
         ]
       }
@@ -227,11 +242,16 @@
     "watch": "tsc -watch -p ./",
     "lint": "tsc -p ./ --noEmit",
     "test": "npm run compile && node out/test/acpClient.test.js",
-    "package": "npm run compile && npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository"
+    "vendor-md": "cp node_modules/marked/lib/marked.umd.js media/marked.umd.js && cp node_modules/dompurify/dist/purify.min.js media/purify.min.js",
+    "package": "npm run vendor-md && npm run compile && npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.13",
+    "marked": "^18.0.9"
   }
 }
