@@ -149,6 +149,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const purifyUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "media", "purify.min.js")
     );
+    const mermaidUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "mermaid.tiny.min.js")
+    );
     const csp = [
       "default-src 'none'",
       `style-src ${webview.cspSource} 'unsafe-inline'`,
@@ -201,6 +204,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     .msg.md th { background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,.2)); font-weight: 600; }
     .msg.md hr { border: none; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.45)); margin: 0.8em 0; }
+    .msg.md .mermaid {
+      overflow-x: auto; text-align: center; background: transparent;
+      padding: 6px 0; margin: 0.55em 0;
+    }
+    .msg.md .mermaid svg { max-width: 100%; height: auto; }
+    .msg.md .mermaid-error {
+      opacity: 0.85; font-size: 0.85em; white-space: pre-wrap;
+      border-left: 2px solid var(--vscode-inputValidation-errorBorder, #f14c4c);
+      padding-left: 8px;
+    }
     .system, .tool { opacity: 0.85; font-size: 0.9em; }
     .thought { opacity: 0.65; font-size: 0.85em; font-style: italic;
       border-left: 2px solid var(--vscode-descriptionForeground, #888); padding-left: 8px; }
@@ -242,6 +255,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   </div>
   <script src="${markedUri}"></script>
   <script src="${purifyUri}"></script>
+  <script src="${mermaidUri}"></script>
   <script>
     const vscode = acquireVsCodeApi();
     const log = document.getElementById('log');
@@ -333,10 +347,74 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         .replace(/"/g, '&quot;');
     }
 
+    let mermaidReady = false;
+    const mermaidTimers = new WeakMap();
+
+    function initMermaid() {
+      if (mermaidReady || typeof mermaid === 'undefined') return mermaidReady;
+      try {
+        const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: dark ? 'dark' : 'default',
+          fontFamily: 'var(--vscode-font-family)',
+        });
+        mermaidReady = true;
+      } catch (err) {
+        mermaidReady = false;
+      }
+      return mermaidReady;
+    }
+
+    function promoteMermaidBlocks(root) {
+      root.querySelectorAll('pre > code.language-mermaid').forEach((code) => {
+        const pre = code.parentElement;
+        if (!pre) return;
+        const wrap = document.createElement('pre');
+        wrap.className = 'mermaid';
+        wrap.textContent = code.textContent || '';
+        pre.replaceWith(wrap);
+      });
+    }
+
+    async function runMermaid(root) {
+      if (!initMermaid()) return;
+      promoteMermaidBlocks(root);
+      const nodes = Array.from(root.querySelectorAll('pre.mermaid:not([data-processed])'));
+      if (!nodes.length) return;
+      for (const node of nodes) {
+        const source = node.textContent || '';
+        try {
+          await mermaid.run({ nodes: [node], suppressErrors: true });
+          if (!node.querySelector('svg')) {
+            node.removeAttribute('data-processed');
+            node.className = 'mermaid-error';
+            node.textContent = source;
+          }
+        } catch (err) {
+          node.removeAttribute('data-processed');
+          node.className = 'mermaid-error';
+          node.textContent = source;
+        }
+      }
+    }
+
+    function scheduleMermaid(root) {
+      const prev = mermaidTimers.get(root);
+      if (prev) clearTimeout(prev);
+      const t = setTimeout(() => {
+        mermaidTimers.delete(root);
+        void runMermaid(root);
+      }, 280);
+      mermaidTimers.set(root, t);
+    }
+
     function setMarkdown(el, text) {
       el.dataset.raw = text || '';
       el.classList.add('md');
       el.innerHTML = renderMd(el.dataset.raw);
+      scheduleMermaid(el);
     }
 
     function appendMarkdown(el, chunk) {

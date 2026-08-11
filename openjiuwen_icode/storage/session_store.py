@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -319,6 +320,13 @@ class SessionStore:
                         removed = True
             except OSError:
                 continue
+        # Session-scoped sidecar directory (event logs, etc.).
+        session_dir = self.store_dir / session_id
+        if session_dir.is_dir():
+            try:
+                shutil.rmtree(session_dir)
+            except OSError:
+                pass
         if (
             self._current is not None
             and self._current.session_id == session_id

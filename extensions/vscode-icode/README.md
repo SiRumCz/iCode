@@ -68,6 +68,8 @@ If Output shows `Read-only file system: '/logs'`, upgrade the CLI (log bootstrap
 | iCode: Refresh Sessions | `session/list` |
 | iCode: Delete Session | Confirm then `session/delete` (trash icon / context menu) |
 
+Chat renders assistant Markdown (GFM tables, code) and \`\`\`mermaid fences as diagrams.
+
 ## Community ACP Client escape hatch
 
 Before/without this extension, [ACP Client](https://marketplace.visualstudio.com/items?itemName=formulahendry.acp-client) can spawn:

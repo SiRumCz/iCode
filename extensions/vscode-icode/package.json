@@ -2,7 +2,7 @@
   "name": "icode",
   "displayName": "iCode",
   "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
-  "version": "0.1.8",
+  "version": "0.1.10",
   "publisher": "openjiuwen",
   "license": "Apache-2.0",
   "repository": {
@@ -256,7 +256,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "tsc -p ./ --noEmit",
     "test": "npm run compile && node out/test/acpClient.test.js",
-    "vendor-md": "cp node_modules/marked/lib/marked.umd.js media/marked.umd.js && cp node_modules/dompurify/dist/purify.min.js media/purify.min.js",
+    "vendor-md": "cp node_modules/marked/lib/marked.umd.js media/marked.umd.js && cp node_modules/dompurify/dist/purify.min.js media/purify.min.js && cp node_modules/@mermaid-js/tiny/dist/mermaid.tiny.js media/mermaid.tiny.min.js",
     "package": "npm run vendor-md && npm run compile && npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository"
   },
   "devDependencies": {
@@ -265,6 +265,7 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "@mermaid-js/tiny": "^11.16.1",
     "dompurify": "^3.4.13",
     "marked": "^18.0.9"
   }

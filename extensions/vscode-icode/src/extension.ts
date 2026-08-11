@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { AcpClient, SessionUpdate } from "./acp/client";
 import { AcpProcess } from "./acp/process";
 import { ChatViewProvider } from "./chat/panel";
-import { SessionsTreeProvider, SessionItem } from "./chat/sessions";
+import { SessionsTreeProvider, SessionItem, sessionIdFromArg } from "./chat/sessions";
 import { IcodeConfig, SECRET_API_KEY } from "./config";
 
 let extContext: vscode.ExtensionContext;
@@ -12,8 +12,11 @@ let status: vscode.StatusBarItem;
 let output: vscode.OutputChannel;
 let chat: ChatViewProvider;
 let sessions: SessionsTreeProvider;
+let sessionsView: vscode.TreeView<SessionItem>;
 let currentSessionId: string | undefined;
 let attachedContext: string | undefined;
+/** Skip selection→load while a delete confirmation/request is in flight. */
+let suppressSessionLoad = false;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extContext = context;
@@ -34,14 +37,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   sessions = new SessionsTreeProvider(() => listSessions());
 
-  const sessionsView = vscode.window.createTreeView("icode.sessionsView", {
+  sessionsView = vscode.window.createTreeView("icode.sessionsView", {
     treeDataProvider: sessions,
     showCollapseAll: false,
   });
   sessionsView.onDidChangeSelection((e) => {
+    if (suppressSessionLoad) {
+      return;
+    }
     const item = e.selection[0];
-    if (item instanceof SessionItem && item.sessionId) {
-      void loadSession(item.sessionId);
+    const sessionId = sessionIdFromArg(item);
+    if (sessionId) {
+      void loadSession(sessionId);
     }
   });
 
@@ -71,11 +78,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("icode.refreshSessions", () => sessions.refresh()),
     vscode.commands.registerCommand(
       "icode.loadSession",
-      (arg?: SessionItem | string) => void loadSession(sessionIdFromArg(arg))
+      (arg?: unknown) => void loadSession(resolveSessionId(arg))
     ),
     vscode.commands.registerCommand(
       "icode.deleteSession",
-      (arg?: SessionItem | string) => void deleteSession(arg)
+      (arg?: unknown) => void deleteSession(arg)
     )
   );
 }
@@ -278,6 +285,14 @@ async function newSession(): Promise<void> {
   sessions.refresh();
 }
 
+function resolveSessionId(arg?: unknown): string | undefined {
+  const fromArg = sessionIdFromArg(arg);
+  if (fromArg) {
+    return fromArg;
+  }
+  return sessionIdFromArg(sessionsView?.selection?.[0]);
+}
+
 async function loadSession(sessionId?: string): Promise<void> {
   if (!sessionId) {
     return;
@@ -300,45 +315,55 @@ async function loadSession(sessionId?: string): Promise<void> {
   );
 }
 
-function sessionIdFromArg(arg?: SessionItem | string): string | undefined {
-  if (!arg) {
-    return undefined;
-  }
-  if (typeof arg === "string") {
-    return arg;
-  }
-  return arg.sessionId;
-}
-
-async function deleteSession(arg?: SessionItem | string): Promise<void> {
-  const sessionId = sessionIdFromArg(arg);
+async function deleteSession(arg?: unknown): Promise<void> {
+  const sessionId = resolveSessionId(arg);
   if (!sessionId) {
+    vscode.window.showWarningMessage(
+      "No session selected to delete. Click a session first, then delete."
+    );
     return;
   }
   const label =
-    typeof arg === "object" && arg?.label ? String(arg.label) : sessionId;
-  const choice = await vscode.window.showWarningMessage(
-    `Delete session “${label}”? This cannot be undone.`,
-    { modal: true },
-    "Delete"
-  );
-  if (choice !== "Delete") {
-    return;
-  }
+    (arg &&
+      typeof arg === "object" &&
+      "label" in arg &&
+      arg.label != null &&
+      String(
+        typeof arg.label === "object" &&
+          arg.label &&
+          "label" in (arg.label as object)
+          ? (arg.label as { label: string }).label
+          : arg.label
+      )) ||
+    sessionId;
+  suppressSessionLoad = true;
   try {
+    const choice = await vscode.window.showWarningMessage(
+      `Delete session “${label}”?\n${sessionId}\nThis cannot be undone.`,
+      { modal: true },
+      "Delete"
+    );
+    if (choice !== "Delete") {
+      return;
+    }
     const c = await ensureClient();
     await c.request("session/delete", { sessionId });
+    sessions.markDeleted(sessionId);
     if (currentSessionId === sessionId) {
       currentSessionId = undefined;
       chat.clear();
       chat.postSystem(`Deleted session ${sessionId}`);
     } else {
-      vscode.window.showInformationMessage(`Deleted session ${label}`);
+      vscode.window.showInformationMessage(`Deleted “${label}”`);
     }
+    // Second refresh after the server list settles.
     sessions.refresh();
   } catch (err) {
     vscode.window.showErrorMessage(`Failed to delete session: ${err}`);
     output.appendLine(String(err));
+    sessions.refresh();
+  } finally {
+    suppressSessionLoad = false;
   }
 }
 
