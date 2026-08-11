@@ -152,6 +152,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const mermaidUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "media", "mermaid.tiny.min.js")
     );
+    const hljsUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "highlight.min.js")
+    );
+    const hljsLightUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "hljs-github.min.css")
+    );
+    const hljsDarkUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "hljs-github-dark.min.css")
+    );
     const csp = [
       "default-src 'none'",
       `style-src ${webview.cspSource} 'unsafe-inline'`,
@@ -164,6 +173,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>iCode</title>
+  <link rel="stylesheet" href="${hljsLightUri}" class="hljs-theme" data-scheme="light" />
+  <link rel="stylesheet" href="${hljsDarkUri}" class="hljs-theme" data-scheme="dark" disabled />
   <style>
     :root { color-scheme: light dark; }
     body { font-family: var(--vscode-font-family); margin: 0; padding: 8px; color: var(--vscode-foreground); }
@@ -192,6 +203,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       background: var(--vscode-textCodeBlock-background, rgba(127,127,127,.2));
     }
     .msg.md pre code { background: transparent; padding: 0; font-size: 0.88em; }
+    .msg.md pre code.hljs { background: transparent; padding: 0; }
     .msg.md blockquote {
       margin-left: 0; padding-left: 0.8em;
       border-left: 3px solid var(--vscode-descriptionForeground, #888);
@@ -256,6 +268,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <script src="${markedUri}"></script>
   <script src="${purifyUri}"></script>
   <script src="${mermaidUri}"></script>
+  <script src="${hljsUri}"></script>
   <script>
     const vscode = acquireVsCodeApi();
     const log = document.getElementById('log');
@@ -347,6 +360,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         .replace(/"/g, '&quot;');
     }
 
+    function applyHljsTheme() {
+      const dark =
+        document.body.classList.contains('vscode-dark') ||
+        document.body.classList.contains('vscode-high-contrast');
+      document.querySelectorAll('link.hljs-theme').forEach((link) => {
+        const scheme = link.getAttribute('data-scheme');
+        link.disabled = dark ? scheme !== 'dark' : scheme !== 'light';
+      });
+    }
+    applyHljsTheme();
+    new MutationObserver(applyHljsTheme).observe(document.body, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+
+    function highlightCode(root) {
+      if (typeof hljs === 'undefined') return;
+      root.querySelectorAll('pre > code').forEach((block) => {
+        if (/language-mermaid\\b/.test(block.className || '')) return;
+        if (block.dataset.highlighted === 'yes') return;
+        try {
+          hljs.highlightElement(block);
+        } catch (err) {
+          /* ignore unknown languages */
+        }
+      });
+    }
+
     let mermaidReady = false;
     const mermaidTimers = new WeakMap();
 
@@ -414,6 +455,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       el.dataset.raw = text || '';
       el.classList.add('md');
       el.innerHTML = renderMd(el.dataset.raw);
+      highlightCode(el);
       scheduleMermaid(el);
     }
 

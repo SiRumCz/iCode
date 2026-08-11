@@ -68,7 +68,7 @@ If Output shows `Read-only file system: '/logs'`, upgrade the CLI (log bootstrap
 | iCode: Refresh Sessions | `session/list` |
 | iCode: Delete Session(s) | Confirm then `session/delete` (multi-select + trash / context menu) |
 
-Chat renders assistant Markdown (GFM tables, code) and \`\`\`mermaid fences as diagrams.
+Chat renders assistant Markdown (GFM tables, code with highlight.js, and \`\`\`mermaid fences as diagrams).
 
 ## Community ACP Client escape hatch
 
