@@ -252,6 +252,14 @@ class AcpServer:
             "title": session.title,
             "messageCount": len(session.messages),
             "model": session.model,
+            "messages": [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "timestamp": m.timestamp,
+                }
+                for m in session.messages
+            ],
         }
 
     async def _session_list(self, params: dict[str, Any]) -> dict[str, Any]:

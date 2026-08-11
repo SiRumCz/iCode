@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { readSubmitKeybinding, SubmitKeybinding } from "../config";
 
 export interface ChatHandlers {
   onSend: (text: string) => void;
@@ -46,6 +47,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
     );
+    this.pushSettings();
+  }
+
+  /** Push current submit keybinding into the webview (call on config change). */
+  pushSettings(): void {
+    const mode = readSubmitKeybinding();
+    this.post({ type: "settings", submitKeybinding: mode });
   }
 
   clear(): void {
@@ -60,8 +68,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "user", text });
   }
 
+  /** Render a complete assistant message (history / non-streaming). */
+  postAssistant(text: string): void {
+    this.assistantOpen = false;
+    this.thoughtOpen = false;
+    this.post({ type: "assistant", text });
+  }
+
+  /** Replace the transcript with persisted session messages. */
+  loadHistory(
+    messages: Array<{ role?: string; content?: string }>
+  ): void {
+    this.assistantOpen = false;
+    this.thoughtOpen = false;
+    this.post({
+      type: "history",
+      messages: messages.map((m) => ({
+        role: String(m.role || ""),
+        content: String(m.content || ""),
+      })),
+    });
+  }
+
   appendAssistant(text: string): void {
-    // Reply starts → close the thinking stream bubble.
     this.thoughtOpen = false;
     if (!this.assistantOpen) {
       this.post({ type: "assistantStart" });
@@ -105,6 +134,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private html(webview: vscode.Webview): string {
+    const initial: SubmitKeybinding = readSubmitKeybinding();
     const csp = [
       "default-src 'none'",
       `style-src ${webview.cspSource} 'unsafe-inline'`,
@@ -130,10 +160,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     .thought .label { font-style: normal; opacity: 0.8; margin-bottom: 4px; display: block; }
     .permission { border: 1px solid var(--vscode-inputValidation-warningBorder, orange); padding: 8px; border-radius: 6px; }
     #composer { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    #hint { font-size: 0.8em; opacity: 0.7; }
     textarea { width: 100%; min-height: 56px; resize: vertical; box-sizing: border-box;
       background: var(--vscode-input-background); color: var(--vscode-input-foreground);
       border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 6px; }
-    .row { display: flex; gap: 6px; }
+    .row { display: flex; gap: 6px; align-items: center; }
     button { cursor: pointer; background: var(--vscode-button-background); color: var(--vscode-button-foreground);
       border: none; padding: 6px 10px; border-radius: 4px; }
     button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
@@ -147,6 +178,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <div class="row">
       <button id="send">Send</button>
       <button id="cancel" class="secondary">Stop</button>
+      <span id="hint"></span>
     </div>
   </div>
   <script>
@@ -155,8 +187,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('send');
     const cancelBtn = document.getElementById('cancel');
+    const hint = document.getElementById('hint');
     let assistantEl = null;
     let thoughtBody = null;
+    let submitKeybinding = ${JSON.stringify(initial)};
+
+    function isMac() {
+      return navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    }
+
+    function updateHint() {
+      if (submitKeybinding === 'enter') {
+        hint.textContent = 'Enter to send · Shift+Enter newline';
+      } else {
+        hint.textContent = isMac()
+          ? '⌘⏎ to send · Enter newline'
+          : 'Ctrl+Enter to send · Enter newline';
+      }
+    }
+    updateHint();
 
     function add(cls, text) {
       const el = document.createElement('div');
@@ -175,7 +224,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
     cancelBtn.addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      if (e.key !== 'Enter') return;
+      if (submitKeybinding === 'enter') {
+        if (e.shiftKey) return;
+        e.preventDefault();
+        sendBtn.click();
+        return;
+      }
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
         sendBtn.click();
       }
     });
@@ -183,15 +240,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     window.addEventListener('message', (event) => {
       const msg = event.data || {};
       switch (msg.type) {
+        case 'settings':
+          if (msg.submitKeybinding === 'enter' || msg.submitKeybinding === 'modifierEnter') {
+            submitKeybinding = msg.submitKeybinding;
+            updateHint();
+          }
+          break;
         case 'clear':
           log.innerHTML = '';
           assistantEl = null;
           thoughtBody = null;
           break;
+        case 'history': {
+          log.innerHTML = '';
+          assistantEl = null;
+          thoughtBody = null;
+          const items = Array.isArray(msg.messages) ? msg.messages : [];
+          for (const m of items) {
+            const role = (m.role || '').toLowerCase();
+            const content = m.content || '';
+            if (!content) continue;
+            if (role === 'user') add('user', content);
+            else if (role === 'assistant' || role === 'system') add(role === 'system' ? 'system' : 'assistant', content);
+            else add('system', content);
+          }
+          break;
+        }
         case 'user':
           assistantEl = null;
           thoughtBody = null;
           add('user', msg.text || '');
+          break;
+        case 'assistant':
+          assistantEl = null;
+          thoughtBody = null;
+          add('assistant', msg.text || '');
           break;
         case 'thoughtStart': {
           assistantEl = null;
@@ -209,7 +292,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         case 'thoughtChunk':
           if (!thoughtBody) {
-            // Late chunk without start — open a bubble.
             const wrap = document.createElement('div');
             wrap.className = 'msg thought';
             const label = document.createElement('span');

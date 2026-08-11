@@ -41,6 +41,17 @@ Settings:
 
 `icode.autoApprove` defaults to `false` so the extension can show Allow/Deny for tool confirms (`--no-auto-approve` on the server).
 
+### Chat send shortcut
+
+Setting **`icode.submitKeybinding`**:
+
+| Value | Behavior |
+|-------|----------|
+| `modifierEnter` (default) | ⌘/Ctrl+Enter send · Enter newline |
+| `enter` | Enter send · Shift+Enter newline |
+
+Changes apply immediately to an open Chat panel (no reload required).
+
 If Output shows `Read-only file system: '/logs'`, upgrade the CLI (log bootstrap) and ensure the extension sets workspace cwd when spawning ACP (fixed in recent builds).
 
 ## Commands

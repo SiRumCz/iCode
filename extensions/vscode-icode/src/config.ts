@@ -2,6 +2,15 @@ import * as vscode from "vscode";
 
 export const SECRET_API_KEY = "icode.apiKey";
 
+export type SubmitKeybinding = "modifierEnter" | "enter";
+
+export function readSubmitKeybinding(): SubmitKeybinding {
+  const raw = vscode.workspace
+    .getConfiguration("icode")
+    .get<string>("submitKeybinding");
+  return raw === "enter" ? "enter" : "modifierEnter";
+}
+
 export class IcodeConfig {
   constructor(
     readonly command: string,

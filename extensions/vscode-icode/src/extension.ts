@@ -38,6 +38,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     status,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chat),
     vscode.window.registerTreeDataProvider("icode.sessionsView", sessions),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("icode.submitKeybinding")) {
+        chat.pushSettings();
+      }
+    }),
     vscode.commands.registerCommand("icode.openChat", () =>
       vscode.commands.executeCommand("icode.chatView.focus")
     ),
@@ -195,10 +200,21 @@ async function loadSession(sessionId?: string): Promise<void> {
     return;
   }
   const c = await ensureClient();
-  await c.request("session/load", { sessionId });
-  currentSessionId = sessionId;
-  chat.clear();
-  chat.postSystem(`Loaded session ${sessionId}`);
+  const result = (await c.request("session/load", { sessionId })) as {
+    sessionId?: string;
+    title?: string;
+    model?: string;
+    messages?: Array<{ role?: string; content?: string }>;
+  };
+  currentSessionId = result.sessionId || sessionId;
+  const messages = result.messages ?? [];
+  chat.loadHistory(messages);
+  const title = result.title || currentSessionId;
+  chat.postSystem(
+    messages.length
+      ? `Loaded “${title}” (${messages.length} messages)`
+      : `Loaded “${title}” (no messages yet)`
+  );
 }
 
 async function listSessions(): Promise<

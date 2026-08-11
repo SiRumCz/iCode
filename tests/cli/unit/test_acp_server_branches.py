@@ -140,6 +140,8 @@ async def test_session_load_and_prompt_fail(
     loaded = out.lines()[-1]["result"]
     assert loaded["sessionId"] == "acp-load1"
     assert loaded["title"] == "Loaded"
+    assert "messages" in loaded
+    assert isinstance(loaded["messages"], list)
 
     await server.handle_request(
         {
