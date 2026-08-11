@@ -33,11 +33,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   sessions = new SessionsTreeProvider(() => listSessions());
 
+  const sessionsView = vscode.window.createTreeView("icode.sessionsView", {
+    treeDataProvider: sessions,
+    showCollapseAll: false,
+  });
+  sessionsView.onDidChangeSelection((e) => {
+    const item = e.selection[0];
+    if (item instanceof SessionItem && item.sessionId) {
+      void loadSession(item.sessionId);
+    }
+  });
+
   context.subscriptions.push(
     output,
     status,
+    sessionsView,
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chat),
-    vscode.window.registerTreeDataProvider("icode.sessionsView", sessions),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("icode.submitKeybinding")) {
         chat.pushSettings();

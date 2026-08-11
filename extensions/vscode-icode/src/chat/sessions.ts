@@ -12,13 +12,10 @@ export class SessionItem extends vscode.TreeItem {
     super(title || sessionId, vscode.TreeItemCollapsibleState.None);
     this.description = model ?? "";
     this.contextValue = "icodeSession";
-    this.tooltip = `${title || sessionId}\n${sessionId}`;
-    this.command = {
-      command: "icode.loadSession",
-      title: "Load Session",
-      // Must be JSON-serializable — passing `this` breaks as `__vsc…` commands.
-      arguments: [sessionId],
-    };
+    this.tooltip = `${title || sessionId}\n${sessionId}\nClick to load`;
+    // Do NOT set TreeItem.command — Cursor/VS Code may wrap it as a
+    // transient `__vsc…` command that breaks after reload/reinstall.
+    // Loading is handled via TreeView.onDidChangeSelection instead.
     this.iconPath = new vscode.ThemeIcon("comment-discussion");
   }
 }
@@ -45,11 +42,7 @@ export class SessionsTreeProvider
     const rows = await this.loader();
     return rows.map(
       (r) =>
-        new SessionItem(
-          r.sessionId,
-          r.title || r.sessionId,
-          r.model
-        )
+        new SessionItem(r.sessionId, r.title || r.sessionId, r.model)
     );
   }
 }
