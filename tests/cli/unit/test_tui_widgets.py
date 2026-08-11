@@ -72,6 +72,12 @@ class TestSuggestionList:
 
     def test_slash_catalog_nonempty(self) -> None:
         assert len(SLASH_COMMANDS) >= 8
+        cmds = {c for c, _ in SLASH_COMMANDS}
+        assert "/directories add" in cmds
+        assert "/directories rm" in cmds
+        assert "/directories use" in cmds
+        assert "/quit" in cmds
+        assert "/exit" in cmds
 
 
 class TestBubbles:

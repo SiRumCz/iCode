@@ -27,8 +27,11 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/cwd", "iCode home + directories + tool cwd"),
     ("/directories", "List project directories (primary *)"),
     ("/directories add", "Pick a folder to add (TUI browser)"),
+    ("/directories rm", "Remove a non-primary directory"),
     ("/directories use", "Set primary directory"),
     ("/workdirs", "Same as /directories"),
+    ("/quit", "Exit the TUI (also Ctrl+Q)"),
+    ("/exit", "Same as /quit"),
 ]
 
 

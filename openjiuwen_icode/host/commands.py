@@ -65,6 +65,8 @@ _HELP = """\
 /mcp [tools [server]] Show MCP cache status; tools lists live tool names
 /clear                Ask UI to clear transcript
 /cwd                  Show iCode home, directories, and tool cwd
+/quit                 Exit the TUI (alias: /exit; also Ctrl+Q)
+/exit                 Same as /quit
 /directories          List project directories (alias: /workdirs)
 /directories add …    Add a project directory (TUI: folder picker)
 /directories rm …    Remove a non-primary directory
@@ -85,7 +87,7 @@ type ! again or press Esc to leave. One-shot: !ls
 Copy (TUI, Chrys-style): drag to select; Ctrl/Cmd+C or right-click
 to copy; Ctrl+B to interrupt the agent. Type / for slash suggestions;
 Tab completes, Enter runs. Ctrl+G toggles the Messages/Tasks/Context sidebar.
-Approvals open a modal (Approve / Reject).
+Approvals open a modal (Approve / Reject). Quit with Ctrl+Q or /quit.
 """
 
 

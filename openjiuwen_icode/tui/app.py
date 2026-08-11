@@ -1211,6 +1211,13 @@ class CodingAssistantApp:
                     return
 
                 slash = _parse_slash(prompt)
+                if slash is not None:
+                    name, _args = slash
+                    # Allow quit even while a turn is busy (same as Ctrl+Q).
+                    # Prefer App.exit() — action_quit is async and must be awaited.
+                    if name in {"quit", "exit"}:
+                        self.exit()
+                        return
                 if slash is not None and not self._busy:
                     from openjiuwen_icode.host.workdirs import (
                         format_directories_command_args,
