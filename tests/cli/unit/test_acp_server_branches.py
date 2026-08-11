@@ -240,53 +240,48 @@ async def test_handler_generic_exception() -> None:
 
 
 @pytest.mark.asyncio
-async def test_serve_stdio_parse_and_eof() -> None:
+async def test_serve_reader_parse_and_eof() -> None:
     out = _Capture()
     server = AcpServer(demo=True, stdout=out)  # type: ignore[arg-type]
-
-    class FakeReader:
-        def __init__(self) -> None:
-            self._lines = [
-                b"not-json\n",
-                b'"just-a-string"\n',
-                b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n',
-                b"",
-            ]
-            self._i = 0
-
-        async def readline(self) -> bytes:
-            line = self._lines[self._i]
-            self._i += 1
-            return line
-
-    loop = asyncio.get_running_loop()
-    with patch.object(loop, "connect_read_pipe", AsyncMock()), patch(
-        "asyncio.StreamReader", FakeReader
-    ), patch("asyncio.StreamReaderProtocol", MagicMock()):
-        # Patch serve_stdio internals more directly
-        async def fake_serve() -> int:
-            reader = FakeReader()
-            while not server._closed:
-                line = await reader.readline()
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="replace").strip()
-                if not text:
-                    continue
-                try:
-                    message = json.loads(text)
-                except json.JSONDecodeError:
-                    server._reply_error(None, -32700, "Parse error")
-                    continue
-                if not isinstance(message, dict):
-                    continue
-                await server.handle_request(message)
-            await server.close_all()
-            return 0
-
-        code = await fake_serve()
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"not-json\n")
+    reader.feed_data(b'"just-a-string"\n')
+    reader.feed_data(
+        b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n'
+    )
+    reader.feed_eof()
+    code = await server.serve_reader(reader)
     assert code == 0
     assert any(m.get("error", {}).get("code") == -32700 for m in out.lines())
+    assert any(m.get("id") == 1 for m in out.lines())
+    init = next(m for m in out.lines() if m.get("id") == 1)
+    assert init["result"]["agentInfo"]["version"]
+
+
+@pytest.mark.asyncio
+async def test_serve_stdio_uses_connect_read_pipe() -> None:
+    out = _Capture()
+    server = AcpServer(demo=True, stdout=out)  # type: ignore[arg-type]
+    reader = asyncio.StreamReader()
+    reader.feed_data(
+        b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n'
+    )
+    reader.feed_eof()
+
+    async def fake_connect(protocol_factory, pipe):  # noqa: ANN001
+        return None
+
+    with patch(
+        "asyncio.StreamReader", return_value=reader
+    ), patch(
+        "asyncio.StreamReaderProtocol", MagicMock()
+    ), patch.object(
+        asyncio.get_running_loop(),
+        "connect_read_pipe",
+        AsyncMock(side_effect=fake_connect),
+    ):
+        code = await server.serve_stdio()
+    assert code == 0
     assert any(m.get("id") == 1 for m in out.lines())
 
 
@@ -296,7 +291,48 @@ async def test_run_acp_server_entry() -> None:
         "openjiuwen_icode.acp.server.AcpServer.serve_stdio",
         AsyncMock(return_value=0),
     ):
-        assert await run_acp_server(demo=True) == 0
+        assert await run_acp_server(demo=True, auto_approve=False) == 0
+
+
+@pytest.mark.asyncio
+async def test_session_approve_and_diff() -> None:
+    out = _Capture()
+    server = AcpServer(demo=True, stdout=out, auto_approve=True)  # type: ignore[arg-type]
+    await server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": "/tmp", "sessionId": "acp-diff1"},
+        }
+    )
+    await server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/approve",
+            "params": {
+                "sessionId": "acp-diff1",
+                "interactionId": "ix-1",
+                "approved": False,
+            },
+        }
+    )
+    approve = next(m for m in out.lines() if m.get("id") == 2)
+    assert approve["result"]["ok"] is True
+    assert approve["result"]["approved"] is False
+
+    await server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "session/diff",
+            "params": {"sessionId": "acp-diff1"},
+        }
+    )
+    diff = next(m for m in out.lines() if m.get("id") == 3)
+    assert "files" in diff["result"]
+    await server.close_all()
 
 
 def test_protocol_error_fields() -> None:

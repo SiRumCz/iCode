@@ -17,3 +17,6 @@ build/
 logs/
 auto_harness/
 directories.json
+extensions/vscode-icode/node_modules/
+extensions/vscode-icode/out/
+extensions/vscode-icode/*.vsix

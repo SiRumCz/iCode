@@ -48,6 +48,7 @@ uv run icode tui
 | Path | Role |
 |------|------|
 | `openjiuwen_icode/` | Product package (EventBus, SessionHost, TUI, ACP, …) |
+| `extensions/vscode-icode/` | VS Code / OpenVSX extension (ACP client) |
 | `tests/cli/` | Unit / integration / e2e tests |
 | `scripts/pyapp/` | Offline binary packaging |
 | `docs/` | User guide + design notes |
@@ -72,6 +73,20 @@ make test-report          # unit tests + HTML + coverage
 make test-all             # unit + integration + e2e + HTML + coverage
 make test-e2e-smoke       # no-LLM CLI/TUI smoke only
 make test-e2e-llm         # real LLM e2e (needs ICODE_E2E_API_KEY)
+make acp-smoke            # ACP initialize handshake (icode acp --demo)
+make extension-test       # VS Code extension compile + unit test
+make extension-package    # build extensions/vscode-icode/*.vsix
+```
+
+### VS Code extension (Route 2)
+
+See [`extensions/vscode-icode/README.md`](extensions/vscode-icode/README.md) and
+[`docs/design/vscode-acp-gaps.md`](docs/design/vscode-acp-gaps.md).
+
+```bash
+cd extensions/vscode-icode && npm install && npm run package
+# Install the generated .vsix in VS Code / Cursor
+# Or point community ACP Client at: icode acp
 ```
 
 `make test-all` writes:

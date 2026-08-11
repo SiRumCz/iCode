@@ -1,11 +1,13 @@
 # Cross-platform Makefile for iCode (package: openjiuwen-icode)
 
-.PHONY: help test test-report test-all test-e2e-smoke test-e2e-llm smoke sync
+.PHONY: help test test-report test-all test-e2e-smoke test-e2e-llm smoke sync \
+	acp-smoke extension-test extension-package
 
 PYTHON ?= python
 TESTFLAGS ?= tests/cli/unit -q
 REPORT_DIR ?= reports
 COVERAGE_RC ?= $(CURDIR)/.coveragerc
+EXT_DIR ?= extensions/vscode-icode
 
 # Shared pytest args for HTML + coverage reports.
 PYTEST_REPORT_ARGS = \
@@ -30,6 +32,9 @@ help:
 	@echo "make test-e2e-smoke - no-LLM CLI/TUI smoke (subprocess + Pilot)"
 	@echo "make test-e2e-llm   - real LLM e2e (needs ICODE_E2E_API_KEY)"
 	@echo "make smoke          - import SDK + icode"
+	@echo "make acp-smoke      - ACP initialize handshake via icode acp --demo"
+	@echo "make extension-test - compile + unit-test VS Code extension"
+	@echo "make extension-package - build icode-*.vsix"
 
 sync:
 	uv sync
@@ -68,3 +73,13 @@ test-e2e-llm:
 
 smoke:
 	uv run python -c "from openjiuwen.harness import create_deep_agent; from openjiuwen_icode import __version__; from openjiuwen_icode.events import EventBus; print('ok', __version__)"
+
+acp-smoke:
+	uv run python scripts/acp_smoke.py
+
+extension-test:
+	cd $(EXT_DIR) && npm install && npm test
+
+extension-package:
+	cd $(EXT_DIR) && npm install && npm run package
+	@ls -la $(EXT_DIR)/*.vsix

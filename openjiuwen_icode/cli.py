@@ -855,16 +855,23 @@ def serve_cmd(
     is_flag=True,
     help="Use DemoBackend (no API key). For editor protocol smoke tests.",
 )
+@click.option(
+    "--auto-approve/--no-auto-approve",
+    default=True,
+    show_default=True,
+    help="Auto-approve tool confirms (disable for editor permission UI).",
+)
 @click.pass_context
-def acp_cmd(ctx: click.Context, demo: bool) -> None:
+def acp_cmd(ctx: click.Context, demo: bool, auto_approve: bool) -> None:
     """Run ACP JSON-RPC server on stdin/stdout (editor integration, T-30).
 
     Stdout is reserved for JSON-RPC only; logs go to stderr.
 
     Example::
 
-        openjiuwen acp --demo
-        # Editors launch: openjiuwen acp
+        icode acp --demo
+        icode acp --no-auto-approve
+        # Editors launch: icode acp
     """
     opts: CLIOptions = ctx.obj["opts"]
     from openjiuwen_icode.acp import run_acp_server
@@ -888,7 +895,9 @@ def acp_cmd(ctx: click.Context, demo: bool) -> None:
             click.echo("Falling back to --demo backend.", err=True)
 
     async def _main() -> int:
-        return await run_acp_server(demo=demo, cfg=cfg)
+        return await run_acp_server(
+            demo=demo, cfg=cfg, auto_approve=auto_approve
+        )
 
     try:
         exit_code = asyncio.run(_main())
