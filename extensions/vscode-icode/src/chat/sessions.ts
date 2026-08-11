@@ -41,9 +41,13 @@ export class SessionsTreeProvider
     this._onDidChangeTreeData.fire(undefined);
   }
 
-  /** Optimistically hide a session row, then refresh from the server. */
-  markDeleted(sessionId: string): void {
-    this.pendingDeletes.add(sessionId);
+  /** Optimistically hide session rows, then refresh from the server. */
+  markDeleted(...sessionIds: string[]): void {
+    for (const id of sessionIds) {
+      if (id) {
+        this.pendingDeletes.add(id);
+      }
+    }
     this.refresh();
   }
 
@@ -89,4 +93,33 @@ export function sessionIdFromArg(arg?: unknown): string | undefined {
     return obj.id.trim();
   }
   return undefined;
+}
+
+/** Collect unique session ids from command args and/or current selection. */
+export function collectSessionIds(
+  arg?: unknown,
+  selected?: unknown,
+  fallbackSelection?: readonly unknown[]
+): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        add(item);
+      }
+      return;
+    }
+    const id = sessionIdFromArg(value);
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  };
+  add(arg);
+  add(selected);
+  if (ids.length === 0 && fallbackSelection) {
+    add([...fallbackSelection]);
+  }
+  return ids;
 }

@@ -66,7 +66,7 @@ If Output shows `Read-only file system: '/logs'`, upgrade the CLI (log bootstrap
 | Add Selection to Chat | Editor context menu (selection) → attach + focus chat |
 | iCode: Show Latest Diff | `session/diff` → VS Code diff editors |
 | iCode: Refresh Sessions | `session/list` |
-| iCode: Delete Session | Confirm then `session/delete` (trash icon / context menu) |
+| iCode: Delete Session(s) | Confirm then `session/delete` (multi-select + trash / context menu) |
 
 Chat renders assistant Markdown (GFM tables, code) and \`\`\`mermaid fences as diagrams.
 
