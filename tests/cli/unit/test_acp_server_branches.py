@@ -337,6 +337,41 @@ async def test_session_approve_and_diff() -> None:
     await server.close_all()
 
 
+@pytest.mark.asyncio
+async def test_session_delete(tmp_path: Path) -> None:
+    store = SessionStore(store_dir=tmp_path / "sessions")
+    store.new_session("acp-del1", "m")
+    store.add_message("user", "bye")
+    store.save_current()
+    assert store._session_path("acp-del1").is_file()
+
+    out = _Capture()
+    server = AcpServer(demo=True, stdout=out)  # type: ignore[arg-type]
+    server._default_store = store
+
+    await server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/delete",
+            "params": {"sessionId": "acp-del1"},
+        }
+    )
+    deleted = next(m for m in out.lines() if m.get("id") == 1)
+    assert deleted["result"]["deleted"] is True
+    assert not store._session_path("acp-del1").exists()
+
+    await server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "deleteSession",
+            "params": {"sessionId": "missing"},
+        }
+    )
+    assert out.lines()[-1]["error"]["code"] == -32001
+
+
 def test_protocol_error_fields() -> None:
     exc = AcpProtocolError(-1, "msg", data={"a": 1})
     assert exc.code == -1

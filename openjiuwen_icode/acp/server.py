@@ -7,7 +7,7 @@ Logs and diagnostics must go to stderr.
 
 Implements: ``initialize``, ``session/new``, ``session/load``,
 ``session/list``, ``session/prompt``, ``session/cancel``, ``session/close``,
-``session/approve``, ``session/diff``, ``shutdown``.
+``session/approve``, ``session/diff``, ``session/delete``, ``shutdown``.
 Streaming updates: agent message, thinking, tool call/result, usage,
 permission requests.
 """
@@ -177,6 +177,8 @@ class AcpServer:
             return await self._session_approve(params)
         if method in {"session/diff", "diff"}:
             return await self._session_diff(params)
+        if method in {"session/delete", "deleteSession"}:
+            return await self._session_delete(params)
         if method in {"shutdown", "exit"}:
             await self.close_all()
             return {}
@@ -465,6 +467,18 @@ class AcpServer:
             turn_id=str(turn_id) if turn_id else None,
         )
         return {"sessionId": sid, **payload}
+
+    async def _session_delete(self, params: dict[str, Any]) -> dict[str, Any]:
+        sid = str(params.get("sessionId") or params.get("session_id") or "")
+        if not sid:
+            raise AcpProtocolError(-32602, "sessionId required")
+        # Close in-memory session first if open.
+        if sid in self._sessions:
+            await self._session_close({"sessionId": sid})
+        removed = self._store().delete_session(sid)
+        if not removed:
+            raise AcpProtocolError(-32001, f"session not found: {sid}")
+        return {"deleted": True, "sessionId": sid}
 
     async def _session_cancel(self, params: dict[str, Any]) -> dict[str, Any]:
         sid = str(params.get("sessionId") or params.get("session_id") or "")

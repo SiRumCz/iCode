@@ -54,6 +54,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("icode.refreshSessions", () => sessions.refresh()),
     vscode.commands.registerCommand("icode.loadSession", (item?: SessionItem) =>
       void loadSession(item?.sessionId)
+    ),
+    vscode.commands.registerCommand("icode.deleteSession", (item?: SessionItem) =>
+      void deleteSession(item)
     )
   );
 }
@@ -215,6 +218,37 @@ async function loadSession(sessionId?: string): Promise<void> {
       ? `Loaded “${title}” (${messages.length} messages)`
       : `Loaded “${title}” (no messages yet)`
   );
+}
+
+async function deleteSession(item?: SessionItem): Promise<void> {
+  const sessionId = item?.sessionId;
+  if (!sessionId) {
+    return;
+  }
+  const label = item?.label ? String(item.label) : sessionId;
+  const choice = await vscode.window.showWarningMessage(
+    `Delete session “${label}”? This cannot be undone.`,
+    { modal: true },
+    "Delete"
+  );
+  if (choice !== "Delete") {
+    return;
+  }
+  try {
+    const c = await ensureClient();
+    await c.request("session/delete", { sessionId });
+    if (currentSessionId === sessionId) {
+      currentSessionId = undefined;
+      chat.clear();
+      chat.postSystem(`Deleted session ${sessionId}`);
+    } else {
+      vscode.window.showInformationMessage(`Deleted session ${label}`);
+    }
+    sessions.refresh();
+  } catch (err) {
+    vscode.window.showErrorMessage(`Failed to delete session: ${err}`);
+    output.appendLine(String(err));
+  }
 }
 
 async function listSessions(): Promise<

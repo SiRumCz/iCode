@@ -12,11 +12,13 @@ export class SessionItem extends vscode.TreeItem {
     super(title || sessionId, vscode.TreeItemCollapsibleState.None);
     this.description = model ?? "";
     this.contextValue = "icodeSession";
+    this.tooltip = `${title || sessionId}\n${sessionId}`;
     this.command = {
       command: "icode.loadSession",
       title: "Load Session",
       arguments: [this],
     };
+    this.iconPath = new vscode.ThemeIcon("comment-discussion");
   }
 }
 
