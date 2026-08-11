@@ -13,13 +13,24 @@ Repo: [`michaelling/iCode`](https://gitcode.com/michaelling/iCode)
 # With a published SDK + product wheel:
 pip install openjiuwen-icode
 
-# Local checkout (sibling of agent-core under gitcode/):
+# From this repo (SDK comes from the michaelling/agent-core fork, branch icode):
 cd iCode
 uv sync
 ```
 
-`pyproject.toml` pins a path dependency on `../agent-core` via
-`[tool.uv.sources]` for local development.
+`[tool.uv.sources]` points `openjiuwen` at
+`ssh://git@gitcode.com/michaelling/agent-core.git` (`branch = "icode"`);
+`uv.lock` pins the resolved commit. For local joint edits of the SDK:
+
+```bash
+uv add --editable ../agent-core   # do not commit the path override
+```
+
+After SDK changes land on `origin/icode`, refresh the pin:
+
+```bash
+uv lock --upgrade-package openjiuwen
+```
 
 ## Run
 

@@ -40,8 +40,16 @@ Repository = "https://gitcode.com/michaelling/iCode.git"
 default-groups = ["dev"]
 
 [tool.uv.sources]
-# Local editable SDK while developing against a sibling agent-core checkout.
-openjiuwen = { path = "../agent-core", editable = true }
+# Team default: fork + icode branch (uv.lock pins the resolved commit).
+#
+# Local joint-debug workflow:
+#   1. uv add --editable ../agent-core   # do not commit the path override
+#   2. develop / test against the sibling checkout
+#   3. push SDK changes to origin/icode
+#   4. restore git source in this file if needed, then:
+#        uv lock --upgrade-package openjiuwen
+#      and commit the updated uv.lock for the team
+openjiuwen = { git = "ssh://git@gitcode.com/michaelling/agent-core.git", branch = "icode" }
 
 [dependency-groups]
 dev = [
