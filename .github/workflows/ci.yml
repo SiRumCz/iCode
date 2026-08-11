@@ -1,0 +1,39 @@
+# OpenJiuWen iCode CI (uses sibling agent-core checkout)
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout iCode
+        uses: actions/checkout@v4
+        with:
+          path: iCode
+      - name: Checkout agent-core SDK
+        uses: actions/checkout@v4
+        with:
+          repository: openJiuwen/agent-core
+          path: agent-core
+          ref: develop
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Verify sibling SDK path
+        working-directory: iCode
+        run: |
+          test -d ../agent-core
+          echo "SDK at $(cd ../agent-core && pwd)"
+      - name: Sync
+        working-directory: iCode
+        run: uv sync
+      - name: Smoke
+        working-directory: iCode
+        run: make smoke
+      - name: Unit tests
+        working-directory: iCode
+        run: make test TESTFLAGS="tests/cli/unit tests/unit_tests -q --ignore=tests/cli/e2e"
