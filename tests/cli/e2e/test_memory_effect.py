@@ -9,7 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.cli.e2e.conftest import ModelPreset, run_cli
+from tests.cli.e2e.conftest import (
+    ModelPreset,
+    agent_message_text,
+    run_cli,
+)
 
 
 pytestmark = pytest.mark.llm
@@ -25,17 +29,20 @@ def test_memory_affects_behavior(
         check=False,
     )
     (tmp_path / "OPENJIUWEN.md").write_text(
-        "# Rules\n"
-        "- You MUST end every single response with the exact "
-        "string 'MAGIC_MARKER_XYZ'. This is mandatory.\n",
+        "# Project rules (mandatory)\n"
+        "- Your entire reply MUST contain the exact token "
+        "MAGIC_MARKER_XYZ somewhere.\n"
+        "- Prefer ending the reply with MAGIC_MARKER_XYZ on its own line.\n",
         encoding="utf-8",
     )
 
     result = run_cli(
         "run",
-        "Say hello. Remember to follow ALL rules from the project memory.",
+        "Say hello in one short sentence. "
+        "Obey every rule in Project Memory / OPENJIUWEN.md.",
         cwd=str(tmp_path),
         env=llm_env,
     )
     assert result.returncode == 0, result.stderr
-    assert "MAGIC_MARKER_XYZ" in result.stdout
+    joined = agent_message_text(result.stdout)
+    assert "MAGIC_MARKER_XYZ" in joined, result.stdout

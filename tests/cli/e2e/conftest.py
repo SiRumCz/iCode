@@ -16,7 +16,9 @@ pytest skip message (and a warnings.warn reminder).
 
 from __future__ import annotations
 
+import ast
 import os
+import re
 import subprocess
 import sys
 import warnings
@@ -139,8 +141,14 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
 
 @pytest.fixture
-def llm_env(model_preset: ModelPreset) -> dict[str, str]:
-    """Build a subprocess env for an LLM e2e run, or skip with a reminder."""
+def llm_env(
+    model_preset: ModelPreset, tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, str]:
+    """Build a subprocess env for an LLM e2e run, or skip with a reminder.
+
+    Uses an isolated ``ICODE_HOME`` so real ``~/.icode`` directories /
+    user ``OPENJIUWEN.md`` do not leak into tool / memory e2e cases.
+    """
     key = model_preset.resolve_api_key()
     key_env = model_preset.api_key_env
     if not key:
@@ -165,9 +173,15 @@ def llm_env(model_preset: ModelPreset) -> dict[str, str]:
         or model_preset.model
     )
 
+    icode_home = tmp_path_factory.mktemp("icode_home")
+    project = icode_home / "projects" / "e2e"
+
     env = {
         **os.environ,
         "PYTHONPATH": str(PROJECT_ROOT),
+        # Isolate product state from the developer's real ~/.icode.
+        "ICODE_HOME": str(icode_home),
+        "ICODE_PROJECT": str(project),
         # Product runtime still reads OPENJIUWEN_* / ICODE_*.
         "ICODE_API_KEY": key,
         "OPENJIUWEN_API_KEY": key,
@@ -183,6 +197,40 @@ def llm_env(model_preset: ModelPreset) -> dict[str, str]:
     return env
 
 
+def _with_workdir_flag(args: tuple[str, ...], cwd: str | None) -> list[str]:
+    """Insert ``-C <cwd>`` for ``run`` when cwd is set and not already passed.
+
+    Headless ``run`` otherwise may keep a stale primary from directories.json
+    and never see files / OPENJIUWEN.md under the test temp dir.
+    """
+    out = list(args)
+    if not cwd or not out or out[0] != "run":
+        return out
+    if "-C" in out or "--workdir" in out:
+        return out
+    return ["run", "-C", cwd, *out[1:]]
+
+
+_AGENT_MESSAGE_RE = re.compile(r"^\[AgentMessage\] (.+)$", re.MULTILINE)
+
+
+def agent_message_text(stdout: str) -> str:
+    """Join streamed ``[AgentMessage]`` payloads from text event output.
+
+    Token streaming prints many short events, so markers like
+    ``MAGIC_MARKER_XYZ`` may not appear contiguously in raw stdout.
+    """
+    parts: list[str] = []
+    for match in _AGENT_MESSAGE_RE.finditer(stdout):
+        raw = match.group(1).strip()
+        try:
+            value = ast.literal_eval(raw)
+        except (SyntaxError, ValueError):
+            value = raw.strip("'\"")
+        parts.append(value if isinstance(value, str) else str(value))
+    return "".join(parts)
+
+
 def run_cli(
     *args: str,
     input: str | None = None,
@@ -192,7 +240,7 @@ def run_cli(
 ) -> subprocess.CompletedProcess[str]:
     """Run ``python -m openjiuwen_icode`` as a subprocess."""
     return subprocess.run(
-        [*CLI_CMD, *args],
+        [*CLI_CMD, *_with_workdir_flag(args, cwd)],
         capture_output=True,
         text=True,
         timeout=timeout,
