@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Prepare an iCode release:
-#   1. Optionally bump / set the project version; commit if it changed
+#   1. Optionally bump / set the project version (CLI + VS Code extension);
+#      commit if it changed
 #   2. Tag HEAD as vX.Y.Z and push the commit + tag to origin
-#   3. Build macOS + Linux PyApp binaries into a single release directory
+#   3. Build macOS + Linux PyApp binaries + vscode-icode .vsix into dist/release
+#   4. Optionally publish artifacts to a GitCode release
 #
 # Usage:
 #   ./scripts/pyapp/release.sh                  # bump patch, commit, tag, push, build
@@ -172,11 +174,40 @@ print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['vers
     )
 }
 
+read_extension_version() {
+    local pkg="$PROJECT_ROOT/extensions/vscode-icode/package.json"
+    [[ -f "$pkg" ]] || { echo ""; return 0; }
+    python3 -c "
+import json, pathlib
+print(json.loads(pathlib.Path(r'''$pkg''').read_text())['version'])
+"
+}
+
+# Compare X.Y.Z semver tuples; print the greater one.
+max_semver() {
+    python3 -c "
+import sys
+def parse(v):
+    parts = []
+    for p in v.split('.'):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+a, b = sys.argv[1], sys.argv[2]
+print(a if parse(a) >= parse(b) else b)
+" "$1" "$2"
+}
+
 write_version_files() {
     local new_version="$1"
     (
         cd "$PROJECT_ROOT"
         python3 - "$new_version" <<'PY'
+import json
 import pathlib
 import re
 import sys
@@ -228,6 +259,33 @@ if lock.is_file():
         )
     lock.write_text(lock_updated, encoding="utf-8")
     print(f"updated uv.lock openjiuwen-icode version -> {new}", flush=True)
+
+# Keep VS Code extension on the same release version.
+ext_pkg = root / "extensions" / "vscode-icode" / "package.json"
+if ext_pkg.is_file():
+    data = json.loads(ext_pkg.read_text(encoding="utf-8"))
+    data["version"] = new
+    ext_pkg.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"updated extensions/vscode-icode/package.json -> {new}", flush=True)
+
+ext_lock = root / "extensions" / "vscode-icode" / "package-lock.json"
+if ext_lock.is_file():
+    lock_data = json.loads(ext_lock.read_text(encoding="utf-8"))
+    lock_data["version"] = new
+    root_pkg = lock_data.get("packages", {}).get("")
+    if isinstance(root_pkg, dict):
+        root_pkg["version"] = new
+    ext_lock.write_text(
+        json.dumps(lock_data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        f"updated extensions/vscode-icode/package-lock.json -> {new}",
+        flush=True,
+    )
 PY
     )
 }
@@ -242,6 +300,12 @@ commit_version_bump() {
         if [[ -f uv.lock ]]; then
             git add uv.lock
         fi
+        if [[ -f extensions/vscode-icode/package.json ]]; then
+            git add extensions/vscode-icode/package.json
+        fi
+        if [[ -f extensions/vscode-icode/package-lock.json ]]; then
+            git add extensions/vscode-icode/package-lock.json
+        fi
         if git diff --cached --quiet; then
             pyapp_log "No staged version changes to commit"
             return 0
@@ -253,6 +317,42 @@ EOF
 )"
         pyapp_log "Committed version bump ${old_version} -> ${new_version}"
     )
+}
+
+build_extension_vsix() {
+    # Build extensions/vscode-icode → copy versioned .vsix into the release dir.
+    local version="$1"
+    local dest="$2"
+    local ext_dir="$PROJECT_ROOT/extensions/vscode-icode"
+    local vsix
+
+    [[ -d "$ext_dir" ]] || {
+        pyapp_log "No VS Code extension at $ext_dir; skipping"
+        return 0
+    }
+    pyapp_require_cmd npm
+    pyapp_log "Building VS Code extension (icode ${version})..."
+    (
+        cd "$ext_dir"
+        npm install
+        npm run package
+    )
+    shopt -s nullglob
+    local candidates=("$ext_dir"/icode-"${version}".vsix "$ext_dir"/icode-*.vsix)
+    shopt -u nullglob
+    vsix=""
+    for f in "${candidates[@]}"; do
+        [[ -f "$f" ]] || continue
+        if [[ "$(basename "$f")" == "icode-${version}.vsix" ]]; then
+            vsix="$f"
+            break
+        fi
+        vsix="$f"
+    done
+    [[ -n "$vsix" ]] || pyapp_die "extension package produced no .vsix under $ext_dir"
+    mkdir -p "$dest"
+    cp -f "$vsix" "$dest/icode-${version}.vsix"
+    pyapp_log "Extension artifact: $dest/icode-${version}.vsix"
 }
 
 tag_and_push_release() {
@@ -432,16 +532,31 @@ collect_release_dir() {
 }
 
 # ── Version planning ─────────────────────────────────────────────────
-OLD_VERSION="$(read_pyproject_version)"
+CLI_PKG_VERSION="$(read_pyproject_version)"
+EXT_VERSION="$(read_extension_version)"
+if [[ -n "$EXT_VERSION" ]]; then
+    OLD_VERSION="$(max_semver "$CLI_PKG_VERSION" "$EXT_VERSION")"
+else
+    OLD_VERSION="$CLI_PKG_VERSION"
+fi
+
 case "$VERSION_MODE" in
     keep)
-        NEW_VERSION="$OLD_VERSION"
+        NEW_VERSION="$CLI_PKG_VERSION"
+        if [[ -n "$EXT_VERSION" && "$EXT_VERSION" != "$NEW_VERSION" ]]; then
+            pyapp_die \
+                "version mismatch under --no-bump: pyproject=${CLI_PKG_VERSION} extension=${EXT_VERSION}. Pass --version X.Y.Z (or bump) so CLI + VS Code extension share one release version."
+        fi
         ;;
     set)
         validate_semver "$SET_VERSION"
         NEW_VERSION="$SET_VERSION"
         ;;
     bump)
+        # Bump from the higher of CLI / extension so we never downgrade the VSIX.
+        if [[ -n "$EXT_VERSION" && "$EXT_VERSION" != "$CLI_PKG_VERSION" ]]; then
+            pyapp_log "Unifying versions from pyproject=${CLI_PKG_VERSION} extension=${EXT_VERSION} (base=${OLD_VERSION})"
+        fi
         NEW_VERSION="$(bump_semver "$OLD_VERSION" "$BUMP_PART")"
         validate_semver "$NEW_VERSION"
         ;;
@@ -456,7 +571,7 @@ else
     fi
 fi
 
-pyapp_log "Current version: $OLD_VERSION"
+pyapp_log "Current version: pyproject=${CLI_PKG_VERSION} extension=${EXT_VERSION:-n/a} (bump-base=${OLD_VERSION})"
 pyapp_log "Release version: $NEW_VERSION"
 pyapp_log "Output dir:      $OUT_DIR"
 pyapp_log "Git tag/push:    tag=$([[ "$DO_TAG" == "true" ]] && echo v${NEW_VERSION} || echo skip) push=$([[ "$DO_PUSH" == "true" ]] && echo yes || echo no)"
@@ -475,11 +590,20 @@ m = re.search(r'(?m)^__version__\s*=\s*\"([^\"]*)\"', t)
 print(m.group(1) if m else '')
 "
 )"
+EXT_NOW="$(read_extension_version)"
 
 VERSION_CHANGED=false
-if [[ "$NEW_VERSION" != "$OLD_VERSION" || "$CLI_VERSION" != "$NEW_VERSION" ]]; then
-    if [[ "$VERSION_MODE" == "keep" && "$NEW_VERSION" == "$OLD_VERSION" && "$CLI_VERSION" != "$NEW_VERSION" ]]; then
-        echo "Warning: openjiuwen_icode/__init__.py is ${CLI_VERSION}, pyproject is ${NEW_VERSION}; not syncing under --no-bump." >&2
+need_write=false
+if [[ "$NEW_VERSION" != "$CLI_PKG_VERSION" || "$CLI_VERSION" != "$NEW_VERSION" ]]; then
+    need_write=true
+fi
+if [[ -n "$EXT_NOW" && "$EXT_NOW" != "$NEW_VERSION" ]]; then
+    need_write=true
+fi
+
+if [[ "$need_write" == "true" ]]; then
+    if [[ "$VERSION_MODE" == "keep" ]]; then
+        echo "Warning: version files out of sync with ${NEW_VERSION}; not rewriting under --no-bump." >&2
     else
         VERSION_CHANGED=true
         write_version_files "$NEW_VERSION"
@@ -490,7 +614,9 @@ else
     # NEW_VERSION on disk but were never committed.
     if git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
         && ! git -C "$PROJECT_ROOT" diff --quiet -- pyproject.toml \
-            openjiuwen_icode/__init__.py uv.lock 2>/dev/null; then
+            openjiuwen_icode/__init__.py uv.lock \
+            extensions/vscode-icode/package.json \
+            extensions/vscode-icode/package-lock.json 2>/dev/null; then
         HEAD_VER="$(
             git -C "$PROJECT_ROOT" show HEAD:pyproject.toml 2>/dev/null \
                 | python3 -c "import sys,tomllib; print(tomllib.loads(sys.stdin.read())['project']['version'])" \
@@ -499,7 +625,6 @@ else
         if [[ "$HEAD_VER" != "$NEW_VERSION" ]]; then
             pyapp_log "Detected uncommitted version bump ${HEAD_VER} -> ${NEW_VERSION}; committing"
             VERSION_CHANGED=true
-            # Ensure uv.lock matches (offline) in case a prior uv lock failed mid-way.
             write_version_files "$NEW_VERSION"
             commit_version_bump "$HEAD_VER" "$NEW_VERSION"
         else
@@ -559,12 +684,36 @@ fi
 
 collect_release_dir "$NEW_VERSION" "$OUT_DIR"
 
+# VS Code extension shares the same version; package .vsix into the release dir.
+build_extension_vsix "$NEW_VERSION" "$OUT_DIR"
+
+# Refresh checksums after adding the VSIX.
+(
+    cd "$OUT_DIR"
+    rm -f SHA256SUMS.txt
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -- * > SHA256SUMS.txt 2>/dev/null || true
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 -- * > SHA256SUMS.txt 2>/dev/null || true
+    fi
+    if [[ -f SHA256SUMS.txt ]]; then
+        grep -v -E '(^|[[:space:]])SHA256SUMS\.txt$' SHA256SUMS.txt > SHA256SUMS.txt.tmp \
+            && mv SHA256SUMS.txt.tmp SHA256SUMS.txt \
+            || rm -f SHA256SUMS.txt.tmp
+    fi
+)
+
 # Fail if nothing useful was produced.
 shopt -s nullglob
-ARTIFACTS=("$OUT_DIR"/${BINARY_BASENAME}-linux-* "$OUT_DIR"/${BINARY_BASENAME}-macos-* "$OUT_DIR"/*.whl)
+ARTIFACTS=(
+    "$OUT_DIR"/${BINARY_BASENAME}-linux-*
+    "$OUT_DIR"/${BINARY_BASENAME}-macos-*
+    "$OUT_DIR"/*.whl
+    "$OUT_DIR"/icode-*.vsix
+)
 shopt -u nullglob
 if [[ ${#ARTIFACTS[@]} -eq 0 ]]; then
-    pyapp_die "no macOS/Linux release artifacts found in $OUT_DIR"
+    pyapp_die "no macOS/Linux/extension release artifacts found in $OUT_DIR"
 fi
 
 pyapp_log "Release ready: v${NEW_VERSION}"

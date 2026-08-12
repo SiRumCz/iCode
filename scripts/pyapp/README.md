@@ -25,10 +25,11 @@ Optional:
 ## Release (version bump + macOS/Linux packages)
 
 ```bash
-# Bump patch, commit, tag vX.Y.Z, push to origin, then build slim
+# Bump patch, unify CLI + VS Code extension versions, commit, tag, push, build
 ./scripts/pyapp/release.sh
 
 # Keep current version (no bump commit); still tag HEAD as vX.Y.Z and push
+# (requires pyproject and extensions/vscode-icode versions already equal)
 ./scripts/pyapp/release.sh --no-bump
 
 # Also build full-deps offline binaries (name contains -full-)
@@ -119,6 +120,7 @@ macOS/Windows artifacts.
 | `dist/icode-<os>-<arch>-v<ver>` | Tagged binary |
 | `dist/release/*.tar.gz` / `*.zip` | With `--package` |
 | `dist/release/*.whl` | Wheel copied into the release dir |
+| `dist/release/icode-<ver>.vsix` | VS Code extension (same version) |
 | `dist/release/SHA256SUMS.txt` | Checksums |
 
 ## Entry point

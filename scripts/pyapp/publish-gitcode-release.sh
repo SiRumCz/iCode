@@ -27,7 +27,8 @@ usage() {
 Usage: publish-gitcode-release.sh <version|vX.Y.Z> [artifact-dir]
 
 Creates a GitCode release for the tag (if missing) and uploads files from
-artifact-dir (default: dist/release): archives, wheel, SHA256SUMS, 使用说明.md.
+artifact-dir (default: dist/release): archives, wheel, VSIX, SHA256SUMS,
+使用说明.md.
 
 Requires GITCODE_TOKEN. Owner/repo default from `git remote get-url origin`.
 EOF
@@ -144,6 +145,11 @@ ensure_release() {
 iCode ${VERSION}
 
 See \`使用说明.md\` in the assets for install / slim vs full package notes.
+
+Includes:
+- platform binaries (\`icode-*-v${VERSION}.tar.gz\`, optional \`-full-\`)
+- Python wheel (\`openjiuwen_icode-*-py3-none-any.whl\`)
+- VS Code extension (\`icode-${VERSION}.vsix\`)
 
 Artifacts built by \`scripts/pyapp/release.sh\`.
 EOF
@@ -265,6 +271,7 @@ files=(
     "$ARTIFACT_DIR"/${BINARY_BASENAME}-*.tar.gz
     "$ARTIFACT_DIR"/${BINARY_BASENAME}-*.zip
     "$ARTIFACT_DIR"/*.whl
+    "$ARTIFACT_DIR"/icode-*.vsix
     "$ARTIFACT_DIR"/SHA256SUMS.txt
     "$ARTIFACT_DIR"/使用说明.md
 )
