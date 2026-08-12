@@ -44,6 +44,17 @@ Optional:
 ./scripts/pyapp/release.sh --no-bump --skip-build --no-push   # local tag only
 ```
 
+After binaries are collected, `release.sh` asks whether to upload them to a
+**GitCode release** for `vX.Y.Z` (or use `--publish` / `--no-publish`). Upload
+needs a personal access token:
+
+```bash
+export GITCODE_TOKEN=...   # GitCode PAT with release permissions
+./scripts/pyapp/release.sh --no-bump --full --publish
+# or republish existing artifacts:
+./scripts/pyapp/publish-gitcode-release.sh 0.1.3 dist/release
+```
+
 | Artifact name | Meaning |
 |---------------|---------|
 | `icode-<os>-<arch>-v<ver>.tar.gz` | Slim PyApp; first run installs deps from PyPI |

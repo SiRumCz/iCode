@@ -26,8 +26,13 @@
 #   --no-tag             Do not create a git tag
 #   --no-push            Do not push commit/tag to origin
 #   --force-tag          Move an existing tag onto HEAD if it points elsewhere
+#   --publish            Upload artifacts to a GitCode release (non-interactive yes)
+#   --no-publish         Skip GitCode release upload (non-interactive no)
 #
 #   ./scripts/pyapp/release.sh --no-bump --full
+#
+# After a successful build, asks whether to publish artifacts to GitCode unless
+# --publish / --no-publish is set. Requires GITCODE_TOKEN for uploads.
 #
 # macOS binaries require a Darwin host; Linux targets use Docker when available.
 # Windows is intentionally omitted (needs a Windows runner).
@@ -49,6 +54,7 @@ BUILD_FULL=false
 DO_TAG=true
 DO_PUSH=true
 FORCE_TAG=false
+PUBLISH_MODE="ask"   # ask | yes | no
 OUT_DIR=""
 
 usage() {
@@ -64,6 +70,8 @@ Git:
   --no-tag                   Skip creating vX.Y.Z on HEAD
   --no-push                  Skip pushing commit/tag to origin
   --force-tag                Recreate tag on HEAD if it already exists elsewhere
+  --publish                  Upload build artifacts to a GitCode release
+  --no-publish               Do not upload to GitCode (skip the prompt)
 
 Build:
   --uv                       Use uv installer in slim PyApp binaries
@@ -79,6 +87,7 @@ Examples:
   ./scripts/pyapp/release.sh --no-bump --full
   ./scripts/pyapp/release.sh --version 0.2.0
   ./scripts/pyapp/release.sh --bump minor --out-dir dist/release-0.2.0
+  GITCODE_TOKEN=... ./scripts/pyapp/release.sh --no-bump --full --publish
 EOF
 }
 
@@ -112,6 +121,8 @@ while [[ $# -gt 0 ]]; do
         --no-tag) DO_TAG=false; shift ;;
         --no-push) DO_PUSH=false; shift ;;
         --force-tag) FORCE_TAG=true; shift ;;
+        --publish) PUBLISH_MODE="yes"; shift ;;
+        --no-publish) PUBLISH_MODE="no"; shift ;;
         --out-dir)
             [[ $# -ge 2 ]] || pyapp_die "--out-dir requires a path"
             OUT_DIR="$2"
@@ -299,6 +310,56 @@ tag_and_push_release() {
     )
 }
 
+maybe_publish_gitcode_release() {
+    local version="$1"
+    local artifact_dir="$2"
+    local answer=""
+    local tag="v${version}"
+
+    case "$PUBLISH_MODE" in
+        no)
+            pyapp_log "Skipping GitCode release upload (--no-publish)"
+            return 0
+            ;;
+        yes)
+            answer="y"
+            ;;
+        ask)
+            if [[ ! -t 0 ]]; then
+                pyapp_log "Non-interactive stdin; skip GitCode publish (pass --publish to force)"
+                return 0
+            fi
+            echo
+            echo "Build artifacts are ready in: $artifact_dir"
+            ls -la "$artifact_dir" || true
+            echo
+            read -r -p "Publish these files to GitCode as release ${tag}? [y/N] " answer
+            ;;
+        *)
+            pyapp_die "internal error: unknown PUBLISH_MODE=$PUBLISH_MODE"
+            ;;
+    esac
+
+    case "${answer}" in
+        y|Y|yes|YES|Yes) ;;
+        *)
+            pyapp_log "Not publishing to GitCode"
+            return 0
+            ;;
+    esac
+
+    if [[ -z "${GITCODE_TOKEN:-}" ]]; then
+        echo "GITCODE_TOKEN is not set." >&2
+        echo "Create a personal access token on GitCode, then:" >&2
+        echo "  export GITCODE_TOKEN=..." >&2
+        echo "Re-run publish with:" >&2
+        echo "  ./scripts/pyapp/publish-gitcode-release.sh ${version} ${artifact_dir}" >&2
+        return 1
+    fi
+
+    "$SCRIPT_DIR/publish-gitcode-release.sh" "$version" "$artifact_dir"
+}
+
 collect_release_dir() {
     local version="$1"
     local dest="$2"
@@ -399,8 +460,9 @@ pyapp_log "Current version: $OLD_VERSION"
 pyapp_log "Release version: $NEW_VERSION"
 pyapp_log "Output dir:      $OUT_DIR"
 pyapp_log "Git tag/push:    tag=$([[ "$DO_TAG" == "true" ]] && echo v${NEW_VERSION} || echo skip) push=$([[ "$DO_PUSH" == "true" ]] && echo yes || echo no)"
+pyapp_log "GitCode publish: $PUBLISH_MODE"
 if [[ "$DRY_RUN" == "true" ]]; then
-    pyapp_log "Dry run only — no writes, commit, tag, push, or build"
+    pyapp_log "Dry run only — no writes, commit, tag, push, build, or publish"
     exit 0
 fi
 
@@ -512,3 +574,13 @@ elif [[ "$DO_TAG" == "true" ]]; then
     echo "    Tagged HEAD as v${NEW_VERSION} (pushed when enabled)."
 fi
 echo "    Artifacts: $OUT_DIR"
+
+# Interactive (or --publish / --no-publish) GitCode release upload.
+set +e
+maybe_publish_gitcode_release "$NEW_VERSION" "$OUT_DIR"
+publish_rc=$?
+set -e
+if [[ "$publish_rc" -ne 0 ]]; then
+    echo "Warning: GitCode publish failed (exit ${publish_rc}); local artifacts remain in $OUT_DIR" >&2
+    exit "$publish_rc"
+fi
