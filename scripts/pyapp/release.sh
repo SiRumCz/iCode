@@ -170,7 +170,7 @@ if n != 1:
     raise SystemExit("failed to update version in pyproject.toml")
 pyproject.write_text(updated, encoding="utf-8")
 
-cli_init = root / "openjiuwen" / "harness" / "cli" / "__init__.py"
+cli_init = root / "openjiuwen_icode" / "__init__.py"
 cli_text = cli_init.read_text(encoding="utf-8")
 cli_updated, n = re.subn(
     r'(?m)^(__version__\s*=\s*")[^"]*(")',
@@ -181,24 +181,27 @@ cli_updated, n = re.subn(
 if n != 1:
     raise SystemExit("failed to update __version__ in openjiuwen_icode/__init__.py")
 cli_init.write_text(cli_updated, encoding="utf-8")
-print(f"updated pyproject.toml and harness/cli __version__ -> {new}", flush=True)
+print(f"updated pyproject.toml and openjiuwen_icode/__init__.py -> {new}", flush=True)
 
-# Version-only bump of the local editable package in uv.lock — do NOT run a
+# Version-only bump of this editable package in uv.lock — do NOT run a
 # full `uv lock` here: that re-fetches the whole graph from the configured
 # index and fails the release when the mirror/network times out.
+# (SDK package ``openjiuwen`` is a git dependency and is left alone.)
 lock = root / "uv.lock"
 if lock.is_file():
     lock_text = lock.read_text(encoding="utf-8")
     lock_updated, n = re.subn(
-        r'(name = "openjiuwen"\nversion = ")[^"]+("\nsource = \{ editable = "\." \})',
+        r'(name = "openjiuwen-icode"\nversion = ")[^"]+("\nsource = \{ editable = "\." \})',
         rf'\g<1>{new}\2',
         lock_text,
         count=1,
     )
     if n != 1:
-        raise SystemExit("failed to update openjiuwen version in uv.lock")
+        raise SystemExit(
+            "failed to update openjiuwen-icode version in uv.lock"
+        )
     lock.write_text(lock_updated, encoding="utf-8")
-    print(f"updated uv.lock openjiuwen version -> {new}", flush=True)
+    print(f"updated uv.lock openjiuwen-icode version -> {new}", flush=True)
 PY
     )
 }
