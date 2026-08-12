@@ -1,9 +1,9 @@
 # iCode CI on the GitHub mirror.
 # Development primary is GitCode; this workflow validates the synced tree.
 #
-# openjiuwen SDK comes from [tool.uv.sources] (gitcode.com/michaelling/agent-core,
-# branch icode), pinned in uv.lock. GitHub Actions rewrites the SSH git URL to
-# public HTTPS so uv can fetch without a deploy key.
+# openjiuwen is pinned in uv.lock to gitcode.com/michaelling/agent-core (icode).
+# Actions cannot use that SSH URL, so we clone the same commit over HTTPS and
+# temporarily point [tool.uv.sources] at the local checkout.
 
 name: ci
 
@@ -22,13 +22,48 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Prefer HTTPS for GitCode git dependencies
+      - name: Checkout openjiuwen SDK (GitCode HTTPS @ lock pin)
         run: |
-          git config --global url."https://gitcode.com/".insteadOf "ssh://git@gitcode.com/"
-          git config --global url."https://gitcode.com/".insteadOf "git@gitcode.com:"
+          set -euo pipefail
+          COMMIT="$(python3 - <<'PY'
+          import pathlib, re
+          text = pathlib.Path("uv.lock").read_text(encoding="utf-8")
+          m = re.search(
+              r'name = "openjiuwen"\nversion = "[^"]+"\n'
+              r'source = \{ git = "[^"]+#([0-9a-f]+)" \}',
+              text,
+          )
+          if not m:
+              raise SystemExit("could not parse openjiuwen git commit from uv.lock")
+          print(m.group(1))
+          PY
+          )"
+          echo "Pinned openjiuwen commit: ${COMMIT}"
+          git clone --filter=blob:none https://gitcode.com/michaelling/agent-core.git \
+            "${GITHUB_WORKSPACE}/agent-core"
+          git -C "${GITHUB_WORKSPACE}/agent-core" checkout --detach "${COMMIT}"
 
-      - name: Sync
-        run: uv sync --frozen
+      - name: Point uv at local SDK for CI
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path("pyproject.toml")
+          text = path.read_text(encoding="utf-8")
+          updated, n = re.subn(
+              r'openjiuwen\s*=\s*\{[^}]*git[^}]*\}',
+              'openjiuwen = { path = "../agent-core", editable = true }',
+              text,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit("failed to rewrite [tool.uv.sources] openjiuwen")
+          path.write_text(updated, encoding="utf-8")
+          print("rewrote openjiuwen source -> path = ../agent-core")
+          PY
+          # Refresh lock for the path override (CI-only; not committed).
+          uv lock
+          uv sync
 
       - name: Smoke
         run: make smoke
