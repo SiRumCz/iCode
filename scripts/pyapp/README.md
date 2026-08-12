@@ -25,10 +25,10 @@ Optional:
 ## Release (version bump + macOS/Linux packages)
 
 ```bash
-# Bump patch in pyproject.toml (+ sync CLI __version__), commit, then build slim
+# Bump patch, commit, tag vX.Y.Z, push to origin, then build slim
 ./scripts/pyapp/release.sh
 
-# Keep current version (no commit), only build slim
+# Keep current version (no bump commit); still tag HEAD as vX.Y.Z and push
 ./scripts/pyapp/release.sh --no-bump
 
 # Also build full-deps offline binaries (name contains -full-)
@@ -38,6 +38,10 @@ Optional:
 
 # Set an exact version
 ./scripts/pyapp/release.sh --version 0.2.0
+
+# Version/tag/push only (no binaries)
+./scripts/pyapp/release.sh --skip-build
+./scripts/pyapp/release.sh --no-bump --skip-build --no-push   # local tag only
 ```
 
 | Artifact name | Meaning |

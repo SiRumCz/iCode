@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Prepare an iCode release:
 #   1. Optionally bump / set the project version; commit if it changed
-#   2. Build macOS + Linux PyApp binaries into a single release directory
+#   2. Tag HEAD as vX.Y.Z and push the commit + tag to origin
+#   3. Build macOS + Linux PyApp binaries into a single release directory
 #
 # Usage:
-#   ./scripts/pyapp/release.sh                  # bump patch, commit, build
-#   ./scripts/pyapp/release.sh --no-bump        # keep pyproject version
+#   ./scripts/pyapp/release.sh                  # bump patch, commit, tag, push, build
+#   ./scripts/pyapp/release.sh --no-bump        # keep pyproject version; still tag/push HEAD
 #   ./scripts/pyapp/release.sh --version 0.2.0  # set exact version
 #   ./scripts/pyapp/release.sh --bump minor
 #   ./scripts/pyapp/release.sh --bump major --uv --package-only
@@ -19,9 +20,12 @@
 #   --uv                 Pass --uv to slim PyApp builds
 #   --full               Also build full-deps offline binaries (*-full-*)
 #   --no-docker          Linux builds without Docker (native Linux + musl only)
-#   --skip-build         Version bump/commit only
+#   --skip-build         Version bump/commit/tag/push only
 #   --out-dir DIR        Release output dir (default: dist/release)
 #   --dry-run            Print planned version/actions; do not write or build
+#   --no-tag             Do not create a git tag
+#   --no-push            Do not push commit/tag to origin
+#   --force-tag          Move an existing tag onto HEAD if it points elsewhere
 #
 #   ./scripts/pyapp/release.sh --no-bump --full
 #
@@ -42,6 +46,9 @@ USE_DOCKER=true
 SKIP_BUILD=false
 DRY_RUN=false
 BUILD_FULL=false
+DO_TAG=true
+DO_PUSH=true
+FORCE_TAG=false
 OUT_DIR=""
 
 usage() {
@@ -53,11 +60,16 @@ Version:
   --version X.Y.Z            Set version explicitly
   --no-bump                  Keep current pyproject.toml version
 
+Git:
+  --no-tag                   Skip creating vX.Y.Z on HEAD
+  --no-push                  Skip pushing commit/tag to origin
+  --force-tag                Recreate tag on HEAD if it already exists elsewhere
+
 Build:
   --uv                       Use uv installer in slim PyApp binaries
   --full                     Also build full-deps offline binaries (*-full-*)
   --no-docker                Do not use Docker for Linux targets
-  --skip-build               Only handle version / commit
+  --skip-build               Only handle version / commit / tag / push
   --out-dir DIR              Collect artifacts here (default: dist/release)
   --dry-run                  Show plan only
 
@@ -97,6 +109,9 @@ while [[ $# -gt 0 ]]; do
         --no-docker) USE_DOCKER=false; shift ;;
         --skip-build) SKIP_BUILD=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --no-tag) DO_TAG=false; shift ;;
+        --no-push) DO_PUSH=false; shift ;;
+        --force-tag) FORCE_TAG=true; shift ;;
         --out-dir)
             [[ $# -ge 2 ]] || pyapp_die "--out-dir requires a path"
             OUT_DIR="$2"
@@ -229,6 +244,61 @@ EOF
     )
 }
 
+tag_and_push_release() {
+    # Tag HEAD as vX.Y.Z (bump commit or current commit) and push to origin.
+    local version="$1"
+    local tag="v${version}"
+    local head_sha remote_name existing
+
+    (
+        cd "$PROJECT_ROOT"
+        pyapp_require_cmd git
+        git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+            || pyapp_die "not a git repository"
+
+        head_sha="$(git rev-parse HEAD)"
+        remote_name="$(git remote 2>/dev/null | head -1 || true)"
+        [[ -n "$remote_name" ]] || remote_name="origin"
+
+        if [[ "$DO_TAG" == "true" ]]; then
+            if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+                existing="$(git rev-parse "refs/tags/${tag}^{}")"
+                if [[ "$existing" == "$head_sha" ]]; then
+                    pyapp_log "Tag ${tag} already points at HEAD"
+                elif [[ "$FORCE_TAG" == "true" ]]; then
+                    pyapp_log "Moving tag ${tag} onto HEAD (--force-tag)"
+                    git tag -f -a "$tag" -m "icode ${version}"
+                else
+                    pyapp_die \
+                        "tag ${tag} already exists on ${existing:0:12} (HEAD ${head_sha:0:12}); pass --force-tag to move it"
+                fi
+            else
+                git tag -a "$tag" -m "icode ${version}"
+                pyapp_log "Created annotated tag ${tag} on ${head_sha:0:12}"
+            fi
+        else
+            pyapp_log "Skipping git tag (--no-tag)"
+        fi
+
+        if [[ "$DO_PUSH" != "true" ]]; then
+            pyapp_log "Skipping git push (--no-push)"
+            return 0
+        fi
+
+        pyapp_log "Pushing HEAD to ${remote_name}..."
+        git push -u "$remote_name" HEAD
+
+        if [[ "$DO_TAG" == "true" ]]; then
+            pyapp_log "Pushing tag ${tag} to ${remote_name}..."
+            if [[ "$FORCE_TAG" == "true" ]]; then
+                git push -f "$remote_name" "refs/tags/${tag}"
+            else
+                git push "$remote_name" "refs/tags/${tag}"
+            fi
+        fi
+    )
+}
+
 collect_release_dir() {
     local version="$1"
     local dest="$2"
@@ -328,8 +398,9 @@ fi
 pyapp_log "Current version: $OLD_VERSION"
 pyapp_log "Release version: $NEW_VERSION"
 pyapp_log "Output dir:      $OUT_DIR"
+pyapp_log "Git tag/push:    tag=$([[ "$DO_TAG" == "true" ]] && echo v${NEW_VERSION} || echo skip) push=$([[ "$DO_PUSH" == "true" ]] && echo yes || echo no)"
 if [[ "$DRY_RUN" == "true" ]]; then
-    pyapp_log "Dry run only — no writes, commit, or build"
+    pyapp_log "Dry run only — no writes, commit, tag, push, or build"
     exit 0
 fi
 
@@ -377,8 +448,13 @@ else
     fi
 fi
 
+# Tag the bump commit (or current HEAD with --no-bump) and push to remote
+# before the long binary build, so the release ref exists even if packaging fails.
+tag_and_push_release "$NEW_VERSION"
+
 if [[ "$SKIP_BUILD" == "true" ]]; then
     pyapp_log "Skipping binary build (--skip-build)"
+    pyapp_log "Release ref ready: v${NEW_VERSION}"
     exit 0
 fi
 
@@ -431,6 +507,8 @@ fi
 
 pyapp_log "Release ready: v${NEW_VERSION}"
 if [[ "$VERSION_CHANGED" == "true" ]]; then
-    echo "    Version commit created locally (not pushed)."
+    echo "    Version commit created and pushed (with tag when enabled)."
+elif [[ "$DO_TAG" == "true" ]]; then
+    echo "    Tagged HEAD as v${NEW_VERSION} (pushed when enabled)."
 fi
 echo "    Artifacts: $OUT_DIR"
