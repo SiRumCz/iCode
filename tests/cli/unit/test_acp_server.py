@@ -44,7 +44,7 @@ async def test_initialize_and_session_new_prompt_cancel() -> None:
     init = out.lines()[-1]
     assert init["id"] == 1
     assert init["result"]["protocolVersion"] == 1
-    assert "OpenJiuWen" in init["result"]["agentInfo"]["name"]
+    assert init["result"]["agentInfo"]["name"] == "iCode"
     from openjiuwen_icode import __version__
 
     assert init["result"]["agentInfo"]["version"] == __version__
