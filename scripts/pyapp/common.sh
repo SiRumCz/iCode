@@ -68,14 +68,29 @@ pyapp_build_wheel() {
 }
 
 pyapp_resolve_wheel() {
+    # Wheel filenames normalize hyphens in the dist name to underscores
+    # (PEP 427), e.g. openjiuwen-icode → openjiuwen_icode-…-py3-none-any.whl.
     local version="$1"
-    local preferred="$PROJECT_ROOT/dist/${PYAPP_PROJECT_NAME}-${version}-py3-none-any.whl"
-    if [[ -f "$preferred" ]]; then
-        echo "$preferred"
-        return
-    fi
-    local found
-    found="$(ls -t "$PROJECT_ROOT"/dist/"${PYAPP_PROJECT_NAME}"-*.whl 2>/dev/null | head -1 || true)"
+    local name_hyphen="$PYAPP_PROJECT_NAME"
+    local name_under="${PYAPP_PROJECT_NAME//-/_}"
+    local preferred found
+
+    for preferred in \
+        "$PROJECT_ROOT/dist/${name_under}-${version}-py3-none-any.whl" \
+        "$PROJECT_ROOT/dist/${name_hyphen}-${version}-py3-none-any.whl"
+    do
+        if [[ -f "$preferred" ]]; then
+            echo "$preferred"
+            return 0
+        fi
+    done
+
+    found="$(
+        ls -t \
+            "$PROJECT_ROOT"/dist/"${name_under}"-*.whl \
+            "$PROJECT_ROOT"/dist/"${name_hyphen}"-*.whl \
+            2>/dev/null | head -1 || true
+    )"
     [[ -n "$found" ]] || pyapp_die "no wheel found under dist/; run build wheel first"
     echo "$found"
 }

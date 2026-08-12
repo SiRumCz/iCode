@@ -157,6 +157,8 @@ build_linux_docker() {
     local version wheel_host wheel_name
     version="$(pyapp_project_version)"
     wheel_host="$(pyapp_resolve_wheel "$version")"
+    [[ -n "$wheel_host" && -f "$wheel_host" ]] \
+        || pyapp_die "wheel resolve failed for version $version"
     wheel_name="$(basename "$wheel_host")"
     # Wheel must live under the repo mount (/src/dist/...); do not bind-mount it
     # again to /wheels and cp into dist — that is a same-file copy and fails.
