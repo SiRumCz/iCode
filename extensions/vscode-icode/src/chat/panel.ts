@@ -288,14 +288,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "system", text });
   }
 
-  postTool(title: string, detail: string): void {
+  postTool(title: string, detail: string, toolCallId?: string): void {
     this.finalizeOpenBubbles();
     this.transcript.push({
       role: "tool",
       title,
       content: detail || "",
     });
-    this.post({ type: "tool", title, detail });
+    this.post({
+      type: "tool",
+      title,
+      detail,
+      toolCallId: toolCallId || "",
+    });
   }
 
   postPermission(interactionId: string, message: string): void {
@@ -406,34 +411,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       padding-left: 8px;
     }
     .system { opacity: 0.85; font-size: 0.9em; }
-    .tool-fold {
-      opacity: 0.9; font-size: 0.9em;
+    .tool-group {
+      opacity: 0.95; font-size: 0.9em;
       background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,.12));
       border-radius: 6px; padding: 0;
     }
-    .tool-fold > summary {
+    .tool-group > summary,
+    .tool-item > summary {
       cursor: pointer; list-style: none; padding: 8px 10px;
-      display: flex; align-items: flex-start; gap: 6px;
+      display: flex; align-items: center; gap: 6px;
       user-select: none;
     }
-    .tool-fold > summary::-webkit-details-marker { display: none; }
-    .tool-fold > summary::before {
-      content: '▸'; flex-shrink: 0; opacity: 0.7; line-height: 1.45;
+    .tool-group > summary::-webkit-details-marker,
+    .tool-item > summary::-webkit-details-marker { display: none; }
+    .tool-group > summary::before,
+    .tool-item > summary::before {
+      content: '▸'; flex-shrink: 0; opacity: 0.7;
     }
-    .tool-fold[open] > summary::before { content: '▾'; }
-    .tool-fold .tool-title {
+    .tool-group[open] > summary::before,
+    .tool-item[open] > summary::before { content: '▾'; }
+    .tool-group-title, .tool-item-title {
       flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .tool-fold .tool-detail {
-      margin: 0; padding: 0 10px 8px 22px; white-space: pre-wrap; word-break: break-word;
-      font-family: var(--vscode-editor-font-family, monospace); font-size: 0.88em;
-      opacity: 0.9; max-height: 280px; overflow: auto;
-      border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.35));
-      padding-top: 8px;
+    .tool-group-body { padding: 0 6px 6px 6px; display: flex; flex-direction: column; gap: 4px; }
+    .tool-item {
+      background: var(--vscode-input-background, rgba(0,0,0,.15));
+      border-radius: 4px;
     }
-    .tool-fold.tool-plain {
-      padding: 8px 10px; opacity: 0.85;
+    .tool-item > summary { padding: 6px 8px; font-size: 0.95em; }
+    .tool-item .tool-detail {
+      margin: 0; padding: 0 8px 8px 20px; white-space: pre-wrap; word-break: break-word;
+      font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em;
+      opacity: 0.9; max-height: 220px; overflow: auto;
+      border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3));
+      padding-top: 6px;
     }
+    .tool-status { opacity: 0.7; font-size: 0.85em; flex-shrink: 0; }
     .thought { opacity: 0.65; font-size: 0.85em; font-style: italic;
       border-left: 2px solid var(--vscode-descriptionForeground, #888); padding-left: 8px; }
     .thought .label { font-style: normal; opacity: 0.8; margin-bottom: 4px; display: block; }
@@ -501,6 +514,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const attachClear = document.getElementById('attachClear');
     let assistantEl = null;
     let thoughtBody = null;
+    let toolGroupEl = null;
+    let toolGroupBody = null;
+    let toolGroupTitleEl = null;
+    let toolItemCount = 0;
+    const pendingToolItems = new Map(); // name -> [detailsEl, ...]
     let submitKeybinding = ${JSON.stringify(initial)};
     let imeComposing = false;
     let suppressEnterUntil = 0;
@@ -691,17 +709,166 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       setMarkdown(el, (el.dataset.raw || '') + (chunk || ''));
     }
 
-    function add(cls, text, asMarkdown) {
-      const el = document.createElement('div');
-      el.className = 'msg ' + cls;
-      if (asMarkdown) setMarkdown(el, text || '');
-      else el.textContent = text || '';
-      log.appendChild(el);
+    function closeToolGroup() {
+      toolGroupEl = null;
+      toolGroupBody = null;
+      toolGroupTitleEl = null;
+      toolItemCount = 0;
+      pendingToolItems.clear();
+    }
+
+    function updateToolGroupTitle() {
+      if (!toolGroupTitleEl) return;
+      const n = toolItemCount;
+      toolGroupTitleEl.textContent = n === 1 ? '1 tool call' : (n + ' tool calls');
+    }
+
+    function ensureToolGroup() {
+      if (toolGroupEl && toolGroupBody) return;
+      assistantEl = null;
+      thoughtBody = null;
+      const details = document.createElement('details');
+      details.className = 'msg tool-group';
+      const summary = document.createElement('summary');
+      const titleEl = document.createElement('span');
+      titleEl.className = 'tool-group-title';
+      titleEl.textContent = 'Tool calls';
+      summary.appendChild(titleEl);
+      const body = document.createElement('div');
+      body.className = 'tool-group-body';
+      details.appendChild(summary);
+      details.appendChild(body);
+      log.appendChild(details);
+      toolGroupEl = details;
+      toolGroupBody = body;
+      toolGroupTitleEl = titleEl;
+      toolItemCount = 0;
+    }
+
+    function parseToolTitle(title) {
+      const head = (title || 'tool').trim();
+      const start = head.match(/^▶\\s*(.+)$/);
+      if (start) {
+        return { kind: 'start', name: start[1].trim(), status: 'running', label: start[1].trim() };
+      }
+      const done = head.match(/^■\\s*(.+?)\\s+(completed|failed|done|cancelled|canceled|error)$/i);
+      if (done) {
+        return {
+          kind: 'result',
+          name: done[1].trim(),
+          status: done[2].toLowerCase(),
+          label: done[1].trim(),
+        };
+      }
+      const doneBare = head.match(/^■\\s*(.+)$/);
+      if (doneBare) {
+        return {
+          kind: 'result',
+          name: doneBare[1].trim(),
+          status: 'done',
+          label: doneBare[1].trim(),
+        };
+      }
+      return { kind: 'info', name: head, status: '', label: head };
+    }
+
+    function setToolItemSummary(item, name, status) {
+      const titleEl = item.querySelector('.tool-item-title');
+      const statusEl = item.querySelector('.tool-status');
+      if (titleEl) titleEl.textContent = name;
+      if (statusEl) statusEl.textContent = status || '';
+    }
+
+    function appendToolDetail(item, heading, text) {
+      if (!text) return;
+      let pre = item.querySelector('.tool-detail');
+      if (!pre) {
+        pre = document.createElement('pre');
+        pre.className = 'tool-detail';
+        item.appendChild(pre);
+      }
+      const block = heading + '\\n' + text;
+      pre.textContent = pre.textContent ? (pre.textContent + '\\n\\n' + block) : block;
+    }
+
+    function createToolItem(name, status, detailHeading, detailText, toolCallId) {
+      ensureToolGroup();
+      const item = document.createElement('details');
+      item.className = 'tool-item';
+      if (toolCallId) item.dataset.toolCallId = toolCallId;
+      item.dataset.toolName = name;
+      const summary = document.createElement('summary');
+      const titleEl = document.createElement('span');
+      titleEl.className = 'tool-item-title';
+      titleEl.textContent = name;
+      const statusEl = document.createElement('span');
+      statusEl.className = 'tool-status';
+      statusEl.textContent = status || '';
+      summary.appendChild(titleEl);
+      summary.appendChild(statusEl);
+      item.appendChild(summary);
+      if (detailText) {
+        appendToolDetail(item, detailHeading || 'Detail', detailText);
+      }
+      toolGroupBody.appendChild(item);
+      toolItemCount += 1;
+      updateToolGroupTitle();
+      return item;
+    }
+
+    function renderTool(title, detail, toolCallId) {
+      assistantEl = null;
+      thoughtBody = null;
+      const parsed = parseToolTitle(title);
+      const body = (detail || '').trim();
+      const id = (toolCallId || '').trim();
+
+      if (parsed.kind === 'start') {
+        const item = createToolItem(parsed.name, 'running', 'Args', body, id);
+        const queue = pendingToolItems.get(parsed.name) || [];
+        queue.push(item);
+        pendingToolItems.set(parsed.name, queue);
+        if (id) pendingToolItems.set('id:' + id, [item]);
+        log.scrollTop = log.scrollHeight;
+        return;
+      }
+
+      if (parsed.kind === 'result') {
+        let item = null;
+        if (id && pendingToolItems.has('id:' + id)) {
+          item = pendingToolItems.get('id:' + id).shift();
+          if (!pendingToolItems.get('id:' + id).length) pendingToolItems.delete('id:' + id);
+        }
+        if (!item) {
+          const queue = pendingToolItems.get(parsed.name) || [];
+          item = queue.shift();
+          if (queue.length) pendingToolItems.set(parsed.name, queue);
+          else pendingToolItems.delete(parsed.name);
+        }
+        if (item) {
+          // Drop the same node from the name queue if we matched by id.
+          const nameQueue = pendingToolItems.get(parsed.name) || [];
+          const idx = nameQueue.indexOf(item);
+          if (idx >= 0) {
+            nameQueue.splice(idx, 1);
+            if (nameQueue.length) pendingToolItems.set(parsed.name, nameQueue);
+            else pendingToolItems.delete(parsed.name);
+          }
+          setToolItemSummary(item, parsed.name, parsed.status || 'completed');
+          appendToolDetail(item, 'Result', body);
+        } else {
+          createToolItem(parsed.name, parsed.status || 'completed', 'Result', body, id);
+        }
+        log.scrollTop = log.scrollHeight;
+        return;
+      }
+
+      createToolItem(parsed.label, parsed.status, 'Detail', body, id);
       log.scrollTop = log.scrollHeight;
-      return el;
     }
 
     function renderThought(text) {
+      closeToolGroup();
       assistantEl = null;
       const wrap = document.createElement('div');
       wrap.className = 'msg thought';
@@ -717,34 +884,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       thoughtBody = null;
     }
 
-    function renderTool(title, detail) {
-      assistantEl = null;
-      thoughtBody = null;
-      const head = (title || 'tool').trim();
-      const body = (detail || '').trim();
-      if (!body) {
-        const el = document.createElement('div');
-        el.className = 'msg tool-fold tool-plain';
-        el.textContent = head;
-        log.appendChild(el);
-        log.scrollTop = log.scrollHeight;
-        return;
-      }
-      const details = document.createElement('details');
-      details.className = 'msg tool-fold';
-      const summary = document.createElement('summary');
-      const titleEl = document.createElement('span');
-      titleEl.className = 'tool-title';
-      titleEl.textContent = head;
-      titleEl.title = head;
-      summary.appendChild(titleEl);
-      const pre = document.createElement('pre');
-      pre.className = 'tool-detail';
-      pre.textContent = body;
-      details.appendChild(summary);
-      details.appendChild(pre);
-      log.appendChild(details);
+    function add(cls, text, asMarkdown) {
+      closeToolGroup();
+      const el = document.createElement('div');
+      el.className = 'msg ' + cls;
+      if (asMarkdown) setMarkdown(el, text || '');
+      else el.textContent = text || '';
+      log.appendChild(el);
       log.scrollTop = log.scrollHeight;
+      return el;
     }
 
     function renderHistoryItem(m) {
@@ -759,13 +907,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       } else if (role === 'assistant') {
         if (!content) return;
         thoughtBody = null;
+        closeToolGroup();
         assistantEl = add('assistant', content, true);
         assistantEl = null;
       } else if (role === 'thought' || role === 'thinking') {
         if (!content) return;
         renderThought(content);
       } else if (role === 'tool') {
-        renderTool(title || 'tool', content);
+        renderTool(title || 'tool', content, '');
       } else if (content) {
         assistantEl = null;
         thoughtBody = null;
@@ -808,6 +957,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           log.innerHTML = '';
           assistantEl = null;
           thoughtBody = null;
+          closeToolGroup();
           showAttachment('');
           showSessionInfo('');
           break;
@@ -821,11 +971,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           log.innerHTML = '';
           assistantEl = null;
           thoughtBody = null;
+          closeToolGroup();
           showAttachment('');
           const items = Array.isArray(msg.messages) ? msg.messages : [];
           for (const m of items) {
             renderHistoryItem(m);
           }
+          closeToolGroup();
           log.scrollTop = log.scrollHeight;
           break;
         }
@@ -840,6 +992,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           add('assistant', msg.text || '', true);
           break;
         case 'thoughtStart': {
+          closeToolGroup();
           assistantEl = null;
           const wrap = document.createElement('div');
           wrap.className = 'msg thought';
@@ -855,6 +1008,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         case 'thoughtChunk':
           if (!thoughtBody) {
+            closeToolGroup();
             assistantEl = null;
             const wrap = document.createElement('div');
             wrap.className = 'msg thought';
@@ -870,11 +1024,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           log.scrollTop = log.scrollHeight;
           break;
         case 'assistantStart':
+          closeToolGroup();
           thoughtBody = null;
           assistantEl = add('assistant', '', true);
           break;
         case 'assistantChunk':
-          if (!assistantEl) assistantEl = add('assistant', '', true);
+          if (!assistantEl) {
+            closeToolGroup();
+            assistantEl = add('assistant', '', true);
+          }
           appendMarkdown(assistantEl, msg.text || '');
           log.scrollTop = log.scrollHeight;
           break;
@@ -884,7 +1042,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           add('system', msg.text || '', false);
           break;
         case 'tool':
-          renderTool(msg.title || '', msg.detail || '');
+          renderTool(msg.title || '', msg.detail || '', msg.toolCallId || '');
           break;
         case 'permission': {
           assistantEl = null;

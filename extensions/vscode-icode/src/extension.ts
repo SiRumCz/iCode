@@ -587,13 +587,15 @@ function handleSessionUpdate(params: {
         `▶ ${update.title ?? "tool"}`,
         typeof update.rawInput === "string"
           ? update.rawInput
-          : JSON.stringify(update.rawInput ?? {})
+          : JSON.stringify(update.rawInput ?? {}),
+        update.toolCallId
       );
       break;
     case "tool_call_update":
       chat.postTool(
         `■ ${update.title ?? "tool"} ${update.status ?? "done"}`,
-        clipText(extractUpdateText(update.content), 2000)
+        clipText(extractUpdateText(update.content), 2000),
+        update.toolCallId
       );
       break;
     case "usage_update":
