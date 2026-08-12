@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Multi-platform openjiuwen PyApp release builder.
+# Multi-platform iCode PyApp release builder.
 #
 # Strategy (same practical split as Chrys CD):
 #   - Linux x86_64 / aarch64  → Docker (musl Rust target + glibc CPython embed)
@@ -216,7 +216,7 @@ package_releases() {
             archive="${base%.exe}"
             (
                 cd "$(dirname "$f")"
-                # Ship as openjiuwen.exe inside the zip (Chrys-style).
+                # Ship as icode.exe inside the zip (Chrys-style).
                 cp "$base" "${BINARY_BASENAME}.exe"
                 pyapp_stage_usage_doc .
                 zip -q "$release_dir/${archive}.zip" "${BINARY_BASENAME}.exe" "使用说明.md"

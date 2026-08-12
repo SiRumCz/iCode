@@ -128,7 +128,7 @@ class TestFilterNoneValues:
 class TestLoadCliContent:
     def test_loads_existing_identity(self) -> None:
         text = _load_cli_content("en", "IDENTITY.md")
-        assert "OpenJiuWen iCode" in text
+        assert "iCode" in text
 
     def test_missing_file_returns_empty(self) -> None:
         assert _load_cli_content("en", "DOES_NOT_EXIST.md") == ""

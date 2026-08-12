@@ -1,15 +1,18 @@
-# openjiuwen PyApp packaging
+# iCode PyApp packaging
 
-Build standalone `openjiuwen` binaries (embedded CPython + wheel) with
+Build standalone `icode` binaries (embedded CPython + wheel) with
 [PyApp](https://github.com/ofek/pyapp), following Chrys `scripts/build.sh` /
 `.github/workflows/cd.yml`.
+
+User-facing name is **icode**. The pip project / import path remain
+`openjiuwen-icode` / `openjiuwen_icode` (SDK dependency is still `openjiuwen`).
 
 ## Quick start (current machine)
 
 ```bash
 # Prerequisites: rustup + cargo, curl, perl, uv (recommended)
 ./scripts/pyapp/build.sh
-# → dist/openjiuwen  (+ version-tagged copy)
+# → dist/icode  (+ version-tagged copy)
 ```
 
 Optional:
@@ -39,8 +42,8 @@ Optional:
 
 | Artifact name | Meaning |
 |---------------|---------|
-| `openjiuwen-<os>-<arch>-v<ver>.tar.gz` | Slim PyApp; first run installs deps from PyPI |
-| `openjiuwen-<os>-<arch>-full-v<ver>.tar.gz` | Full offline; deps preinstalled at build time |
+| `icode-<os>-<arch>-v<ver>.tar.gz` | Slim PyApp; first run installs deps from PyPI |
+| `icode-<os>-<arch>-full-v<ver>.tar.gz` | Full offline; deps preinstalled at build time |
 
 Artifacts land in `dist/release/` (override with `--out-dir`). Windows is not
 built here. On a Mac with Docker you typically get macOS (native) + Linux
@@ -48,7 +51,7 @@ built here. On a Mac with Docker you typically get macOS (native) + Linux
 
 End-user instructions are in [`使用说明.md`](./使用说明.md). That file is
 copied into `dist/release/` and into each `.tar.gz` / `.zip` next to the
-`openjiuwen` binary.
+`icode` binary.
 
 `release.sh` bumps `pyproject.toml` / CLI `__version__` / the local
 `openjiuwen` entry in `uv.lock` **offline** (no full `uv lock` network
@@ -61,6 +64,8 @@ Pinned defaults (override via env):
 | `PYAPP_VERSION` | `0.29.0` | PyApp release |
 | `PYAPP_PYTHON_VERSION` | `3.13` | Must be `<3.14` (see `requires-python`) |
 | `PYAPP_PROJECT_FEATURES` | `tui` | Extra features installed on first run |
+| `BINARY_BASENAME` | `icode` | User-facing binary / archive prefix |
+| `PYAPP_PROJECT_NAME` | `openjiuwen-icode` | Wheel / pip project name |
 
 First run of the binary still downloads project dependencies from PyPI into the
 embedded env (`PIP_INDEX_URL` / `UV_INDEX_URL` for mirrors).
@@ -95,8 +100,8 @@ macOS/Windows artifacts.
 
 | Path | Meaning |
 |------|---------|
-| `dist/openjiuwen` | Host binary name |
-| `dist/openjiuwen-<os>-<arch>-v<ver>` | Tagged binary |
+| `dist/icode` | Host binary name |
+| `dist/icode-<os>-<arch>-v<ver>` | Tagged binary |
 | `dist/release/*.tar.gz` / `*.zip` | With `--package` |
 | `dist/release/*.whl` | Wheel copied into the release dir |
 | `dist/release/SHA256SUMS.txt` | Checksums |

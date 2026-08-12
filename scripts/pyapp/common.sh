@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Shared helpers for openjiuwen PyApp packaging (sourced by other scripts).
+# Shared helpers for iCode PyApp packaging (sourced by other scripts).
 # Style and env vars follow Chrys scripts/build.sh + .github/workflows/cd.yml.
+#
+# User-facing release name is ``icode`` (binary + archive prefix).
+# Pip project / import path stay ``openjiuwen-icode`` / ``openjiuwen_icode``.
 
 set -euo pipefail
 
@@ -10,7 +13,7 @@ PYAPP_PYTHON_VERSION="${PYAPP_PYTHON_VERSION:-3.13}"
 PYAPP_PROJECT_NAME="${PYAPP_PROJECT_NAME:-openjiuwen-icode}"
 PYAPP_PROJECT_FEATURES="${PYAPP_PROJECT_FEATURES:-}"
 PYAPP_EXEC_SPEC="${PYAPP_EXEC_SPEC:-openjiuwen_icode.cli:pyapp_main}"
-BINARY_BASENAME="${BINARY_BASENAME:-openjiuwen}"
+BINARY_BASENAME="${BINARY_BASENAME:-icode}"
 
 _pyapp_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$_pyapp_script_dir/../.." && pwd)"

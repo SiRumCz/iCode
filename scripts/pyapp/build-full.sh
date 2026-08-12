@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build a self-contained openjiuwen binary with *all* dependencies preinstalled
+# Build a self-contained icode binary with *all* dependencies preinstalled
 # (offline at runtime). Uses PyApp's recommended approach:
 #   1. Fetch python-build-standalone
 #   2. pip/uv-install openjiuwen[features] + deps into that prefix
 #   3. Re-archive and embed with PYAPP_SKIP_INSTALL=true
 #
 # Output is named with "-full" so it is distinct from the slim PyApp binary:
-#   dist/openjiuwen-<os>-<arch>-full-v<ver>
+#   dist/icode-<os>-<arch>-full-v<ver>
 #
 # Prerequisites: Rust (cargo), curl, perl, uv (recommended) or pip
 # Build-time network is required to download CPython + third-party wheels.
@@ -33,7 +33,7 @@ usage() {
 Usage: build-full.sh [--skip-wheel] [--target <rust-triple>]
 
   Build a full-deps (offline-at-runtime) PyApp binary.
-  Artifact name includes "-full" (e.g. openjiuwen-macos-aarch64-full-v0.1.19).
+  Artifact name includes "-full" (e.g. icode-macos-aarch64-full-v0.1.19).
 EOF
 }
 
@@ -104,7 +104,7 @@ else
     pyapp_die "could not find python binary under $PYTHON_PREFIX"
 fi
 
-pyapp_log "Installing openjiuwen[${PYAPP_PROJECT_FEATURES}] + all deps into embedded CPython..."
+pyapp_log "Installing ${PYAPP_PROJECT_NAME}[${PYAPP_PROJECT_FEATURES}] + all deps into embedded CPython..."
 # Build-time install (needs network / mirror). Runtime will PYAPP_SKIP_INSTALL.
 WHEEL_ABS="${PYAPP_DIR}/${WHEEL}"
 if [[ -n "${PYAPP_PROJECT_FEATURES}" ]]; then
@@ -116,7 +116,7 @@ fi
 uv pip install --python "$PYTHON_BIN" "$UV_SPEC"
 
 pyapp_log "Re-archiving preinstalled distribution..."
-DIST_ARCHIVE="$PYAPP_DIR/openjiuwen-full-python.tar.gz"
+DIST_ARCHIVE="$PYAPP_DIR/icode-full-python.tar.gz"
 tar -czf "$DIST_ARCHIVE" -C "$DIST_ROOT" python
 
 # Configure PyApp for offline runtime (no pip install on first launch).

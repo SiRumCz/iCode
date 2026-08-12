@@ -44,7 +44,7 @@ from openjiuwen_icode.storage.session_store import SessionStore
 logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
-PRODUCT_NAME = "OpenJiuWen iCode"
+PRODUCT_NAME = "iCode"
 
 
 @dataclass

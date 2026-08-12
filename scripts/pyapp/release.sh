@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare an openjiuwen (iCode) release:
+# Prepare an iCode release:
 #   1. Optionally bump / set the project version; commit if it changed
 #   2. Build macOS + Linux PyApp binaries into a single release directory
 #
@@ -218,7 +218,7 @@ commit_version_bump() {
             return 0
         fi
         git commit -m "$(cat <<EOF
-chore(release): bump openjiuwen ${old_version} -> ${new_version}
+chore(release): bump icode ${old_version} -> ${new_version}
 
 EOF
 )"

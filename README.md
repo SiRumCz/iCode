@@ -1,11 +1,12 @@
-# OpenJiuWen iCode
+# iCode
 
 Terminal coding assistant (CLI / Textual TUI / ACP) built on the
 [`openjiuwen`](https://gitcode.com/openJiuwen/agent-core) SDK
 (DeepAgent + tools + session runtime).
 
 Repo: [`michaelling/iCode`](https://gitcode.com/michaelling/iCode)
-(PyPI / distribution name remains `openjiuwen-icode`).
+(PyPI / distribution name remains `openjiuwen-icode`; user-facing CLI
+and release binaries are **`icode`**).
 
 This product currently depends on the
 [`michaelling/agent-core`](https://gitcode.com/michaelling/agent-core) fork,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a self-contained openjiuwen binary for the current (or --target) platform
+# Build a self-contained icode binary for the current (or --target) platform
 # using PyApp. Mirrors Chrys scripts/build.sh.
 #
 # Prerequisites: Rust (cargo, rustup), curl, perl
@@ -18,7 +18,7 @@
 #   PYTHON_DIST    — local python-build-standalone tarball
 #   PROJECT_VERSION — override version stamped into the binary
 #
-# Output: dist/openjiuwen  (or dist/openjiuwen.exe on Windows)
+# Output: dist/icode  (or dist/icode.exe on Windows)
 
 set -euo pipefail
 

@@ -1,8 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Tests for OpenJiuWen iCode product branding."""
-
-from __future__ import annotations
+"""Tests for iCode product branding."""
 
 from openjiuwen_icode.branding import (
     PRODUCT_NAME,
@@ -11,15 +9,15 @@ from openjiuwen_icode.branding import (
 )
 
 
-def test_product_name() -> None:
-    assert PRODUCT_NAME == "OpenJiuWen iCode"
+def test_product_constants() -> None:
+    assert PRODUCT_NAME == "iCode"
     assert PRODUCT_SHORT == "iCode"
 
 
 def test_window_title() -> None:
-    assert window_title() == "OpenJiuWen iCode"
-    assert window_title("demo") == "OpenJiuWen iCode (demo)"
+    assert window_title() == "iCode"
+    assert window_title("demo") == "iCode (demo)"
     assert (
         window_title("m", workspace="agent-core")
-        == "OpenJiuWen iCode (m) · agent-core"
+        == "iCode (m) · agent-core"
     )

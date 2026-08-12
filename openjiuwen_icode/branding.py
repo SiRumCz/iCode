@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 # Display name of the coding-assistant product (TUI / REPL / prompts).
-# The installable package and CLI entry remain ``openjiuwen``.
-PRODUCT_NAME = "OpenJiuWen iCode"
+# User-facing CLI / release binary is ``icode``; pip package remains
+# ``openjiuwen-icode`` and the import path is ``openjiuwen_icode``.
+PRODUCT_NAME = "iCode"
 PRODUCT_SHORT = "iCode"
-PRODUCT_TAGLINE = "OpenJiuWen iCode — agentic coding assistant"
+PRODUCT_TAGLINE = "iCode — agentic coding assistant"
 
 
 def window_title(model: str | None = None, *, workspace: str | None = None) -> str:
