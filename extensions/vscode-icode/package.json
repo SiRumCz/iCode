@@ -2,7 +2,7 @@
   "name": "icode",
   "displayName": "iCode",
   "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "publisher": "openjiuwen",
   "license": "Apache-2.0",
   "repository": {
@@ -33,6 +33,8 @@
     "onCommand:icode.showDiff",
     "onCommand:icode.attachActiveFile",
     "onCommand:icode.addSelectionToChat",
+    "onCommand:icode.addFileToIcode",
+    "onCommand:icode.addFolderToIcode",
     "onCommand:icode.deleteSession",
     "onCommand:icode.loadSession",
     "onCommand:icode.pickSession"
@@ -95,7 +97,19 @@
       },
       {
         "command": "icode.addSelectionToChat",
-        "title": "Add Selection to Chat",
+        "title": "Add Selection to iCode",
+        "category": "iCode",
+        "icon": "$(add)"
+      },
+      {
+        "command": "icode.addFileToIcode",
+        "title": "Add File to iCode",
+        "category": "iCode",
+        "icon": "$(add)"
+      },
+      {
+        "command": "icode.addFolderToIcode",
+        "title": "Add Folder to iCode",
         "category": "iCode",
         "icon": "$(add)"
       },
@@ -124,6 +138,23 @@
         {
           "command": "icode.addSelectionToChat",
           "when": "editorHasSelection",
+          "group": "0_icode@1"
+        },
+        {
+          "command": "icode.addFileToIcode",
+          "when": "editorTextFocus && !editorHasSelection",
+          "group": "0_icode@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "icode.addFileToIcode",
+          "when": "resourceSet && !explorerResourceIsFolder",
+          "group": "0_icode@1"
+        },
+        {
+          "command": "icode.addFolderToIcode",
+          "when": "explorerResourceIsFolder",
           "group": "0_icode@1"
         }
       ],

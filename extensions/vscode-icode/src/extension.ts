@@ -84,6 +84,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("icode.addSelectionToChat", () =>
       void addSelectionToChat()
     ),
+    vscode.commands.registerCommand("icode.addFileToIcode", (uri?: vscode.Uri) =>
+      void addFileToIcode(uri)
+    ),
+    vscode.commands.registerCommand(
+      "icode.addFolderToIcode",
+      (uri?: vscode.Uri) => void addFolderToIcode(uri)
+    ),
     vscode.commands.registerCommand("icode.refreshSessions", () => sessions.refresh()),
     vscode.commands.registerCommand("icode.pickSession", () => void pickSession()),
     vscode.commands.registerCommand(
@@ -135,13 +142,34 @@ function fenceLang(languageId: string): string {
   }
 }
 
+function setTextAttachment(
+  pathLabel: string,
+  text: string,
+  lang: string,
+  kind: "file" | "selection" | "folder"
+): void {
+  const clipped = text.length > 60_000 ? `${text.slice(0, 60_000)}\n…` : text;
+  if (kind === "folder") {
+    attachedContext = `[Attached folder: ${pathLabel}]\n\`\`\`\n${clipped}\n\`\`\``;
+  } else {
+    attachedContext = `[Attached: ${pathLabel}]\n\`\`\`${lang}\n${clipped}\n\`\`\``;
+  }
+  const label =
+    kind === "selection"
+      ? `${pathLabel} (selection)`
+      : kind === "folder"
+        ? `${pathLabel}/ (folder)`
+        : `${pathLabel} (file)`;
+  chat.setAttachment(label);
+  chat.postSystem(`Attached ${label}.`);
+}
+
 function setEditorAttachment(
   doc: vscode.TextDocument,
   selection: vscode.Selection | undefined,
   text: string,
   selectionOnly: boolean
 ): void {
-  const clipped = text.length > 60_000 ? `${text.slice(0, 60_000)}\n…` : text;
   const path = vscode.workspace.asRelativePath(doc.uri);
   const hasSelection = Boolean(selection && !selection.isEmpty);
   let range = "";
@@ -150,11 +178,14 @@ function setEditorAttachment(
     const end = selection.end.line + 1;
     range = start === end ? `:${start}` : `:${start}-${end}`;
   }
+  const pathLabel = `${path}${range}`;
   const lang = fenceLang(doc.languageId);
-  attachedContext = `[Attached: ${path}${range}]\n\`\`\`${lang}\n${clipped}\n\`\`\``;
-  const label = hasSelection
-    ? `${path}${range} (selection)`
-    : `${path} (file)`;
+  const kind = selectionOnly || hasSelection ? "selection" : "file";
+  // Keep quiet system line for selection-from-context-menu (matches prior UX).
+  const clipped = text.length > 60_000 ? `${text.slice(0, 60_000)}\n…` : text;
+  attachedContext = `[Attached: ${pathLabel}]\n\`\`\`${lang}\n${clipped}\n\`\`\``;
+  const label =
+    kind === "selection" ? `${pathLabel} (selection)` : `${pathLabel} (file)`;
   chat.setAttachment(label);
   if (!selectionOnly) {
     chat.postSystem(`Attached ${label}.`);
@@ -193,6 +224,111 @@ async function attachActiveFile(): Promise<void> {
       : editor.document.getText();
   setEditorAttachment(editor.document, selection, text, false);
   await focusChat();
+}
+
+function guessLangFromPath(filePath: string): string {
+  const ext = filePath.split(".").pop()?.toLowerCase() || "";
+  const map: Record<string, string> = {
+    ts: "typescript",
+    tsx: "tsx",
+    js: "javascript",
+    jsx: "jsx",
+    py: "python",
+    md: "markdown",
+    json: "json",
+    yml: "yaml",
+    yaml: "yaml",
+    sh: "bash",
+    bash: "bash",
+    rs: "rust",
+    go: "go",
+    java: "java",
+    css: "css",
+    html: "html",
+    toml: "toml",
+  };
+  return map[ext] || "";
+}
+
+async function addFileToIcode(uri?: vscode.Uri): Promise<void> {
+  let target = uri;
+  if (!target) {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showWarningMessage("No file to attach.");
+      return;
+    }
+    target = editor.document.uri;
+    // Prefer live editor buffer for the active file.
+    setEditorAttachment(
+      editor.document,
+      undefined,
+      editor.document.getText(),
+      false
+    );
+    await focusChat();
+    return;
+  }
+
+  try {
+    const stat = await vscode.workspace.fs.stat(target);
+    if (stat.type & vscode.FileType.Directory) {
+      await addFolderToIcode(target);
+      return;
+    }
+    const openDoc = vscode.workspace.textDocuments.find(
+      (d) => d.uri.toString() === target!.toString()
+    );
+    if (openDoc) {
+      setEditorAttachment(openDoc, undefined, openDoc.getText(), false);
+      await focusChat();
+      return;
+    }
+    const bytes = await vscode.workspace.fs.readFile(target);
+    const text = Buffer.from(bytes).toString("utf8");
+    const pathLabel = vscode.workspace.asRelativePath(target);
+    setTextAttachment(pathLabel, text, guessLangFromPath(pathLabel), "file");
+    await focusChat();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Failed to attach file: ${msg}`);
+  }
+}
+
+async function addFolderToIcode(uri?: vscode.Uri): Promise<void> {
+  const target =
+    uri ??
+    (vscode.window.activeTextEditor
+      ? vscode.Uri.joinPath(vscode.window.activeTextEditor.document.uri, "..")
+      : undefined);
+  if (!target) {
+    vscode.window.showWarningMessage("No folder to attach.");
+    return;
+  }
+  try {
+    const stat = await vscode.workspace.fs.stat(target);
+    if (!(stat.type & vscode.FileType.Directory)) {
+      await addFileToIcode(target);
+      return;
+    }
+    const entries = await vscode.workspace.fs.readDirectory(target);
+    const lines = entries
+      .map(([name, type]) => {
+        const mark = type & vscode.FileType.Directory ? "/" : "";
+        return `${name}${mark}`;
+      })
+      .sort((a, b) => a.localeCompare(b));
+    const clipped =
+      lines.length > 300
+        ? `${lines.slice(0, 300).join("\n")}\n… (${lines.length - 300} more)`
+        : lines.join("\n");
+    const pathLabel = vscode.workspace.asRelativePath(target);
+    setTextAttachment(pathLabel, clipped || "(empty)", "", "folder");
+    await focusChat();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Failed to attach folder: ${msg}`);
+  }
 }
 
 async function ensureClient(): Promise<AcpClient> {
