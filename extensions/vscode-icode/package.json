@@ -2,7 +2,7 @@
   "name": "icode",
   "displayName": "iCode",
   "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "publisher": "openjiuwen",
   "license": "Apache-2.0",
   "repository": {
@@ -35,6 +35,7 @@
     "onCommand:icode.addSelectionToChat",
     "onCommand:icode.addFileToIcode",
     "onCommand:icode.addFolderToIcode",
+    "onCommand:icode.exportTranscript",
     "onCommand:icode.deleteSession",
     "onCommand:icode.loadSession",
     "onCommand:icode.pickSession"
@@ -128,6 +129,11 @@
         "icon": "$(history)"
       },
       {
+        "command": "icode.exportTranscript",
+        "title": "iCode: Export Transcript",
+        "icon": "$(export)"
+      },
+      {
         "command": "icode.deleteSession",
         "title": "iCode: Delete Session(s)",
         "icon": "$(trash)"
@@ -170,9 +176,14 @@
           "group": "navigation@2"
         },
         {
-          "command": "icode.newSession",
+          "command": "icode.exportTranscript",
           "when": "view == icode.chatView",
           "group": "navigation@3"
+        },
+        {
+          "command": "icode.newSession",
+          "when": "view == icode.chatView",
+          "group": "navigation@4"
         },
         {
           "command": "icode.refreshSessions",
@@ -182,6 +193,16 @@
       ],
       "view/item/context": [
         {
+          "command": "icode.exportTranscript",
+          "when": "view == icode.sessionsView && viewItem == icodeSession",
+          "group": "inline"
+        },
+        {
+          "command": "icode.exportTranscript",
+          "when": "view == icode.sessionsView && viewItem == icodeSession",
+          "group": "1_modification@1"
+        },
+        {
           "command": "icode.deleteSession",
           "when": "view == icode.sessionsView && viewItem == icodeSession",
           "group": "inline"
@@ -189,7 +210,7 @@
         {
           "command": "icode.deleteSession",
           "when": "view == icode.sessionsView && viewItem == icodeSession",
-          "group": "1_modification"
+          "group": "1_modification@2"
         }
       ]
     },

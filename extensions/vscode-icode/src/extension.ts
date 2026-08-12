@@ -1,6 +1,11 @@
 import * as vscode from "vscode";
+import * as os from "os";
 import { AcpClient, SessionUpdate } from "./acp/client";
 import { AcpProcess } from "./acp/process";
+import {
+  messagesToMarkdown,
+  transcriptFilename,
+} from "./chat/exportMarkdown";
 import { ChatViewProvider } from "./chat/panel";
 import { SessionsTreeProvider, SessionItem, sessionIdFromArg, collectSessionIds } from "./chat/sessions";
 import { IcodeConfig, SECRET_API_KEY } from "./config";
@@ -35,6 +40,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     onClearAttachment: () => clearAttachment(),
     onPickSession: () => void pickSession(),
     onNewSession: () => void newSession(),
+    onExportTranscript: () => void exportTranscript(),
   });
 
   sessions = new SessionsTreeProvider(() => listSessions());
@@ -90,6 +96,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(
       "icode.addFolderToIcode",
       (uri?: vscode.Uri) => void addFolderToIcode(uri)
+    ),
+    vscode.commands.registerCommand(
+      "icode.exportTranscript",
+      (arg?: unknown) => void exportTranscript(arg)
     ),
     vscode.commands.registerCommand("icode.refreshSessions", () => sessions.refresh()),
     vscode.commands.registerCommand("icode.pickSession", () => void pickSession()),
@@ -492,6 +502,94 @@ async function loadSession(sessionId?: string): Promise<void> {
       ? `Loaded “${title}” (${messages.length} messages)`
       : `Loaded “${title}” (no messages yet)`
   );
+}
+
+async function exportTranscript(arg?: unknown): Promise<void> {
+  const sid = sessionIdFromArg(arg) || currentSessionId;
+  let title = chat.getSessionTitle() || sid || "iCode Transcript";
+  let messages = chat.getTranscriptMessages();
+  let exportSessionId = currentSessionId;
+
+  // Prefer persisted timeline when exporting a different session from the tree.
+  if (sid && sid !== currentSessionId) {
+    try {
+      const c = await ensureClient();
+      const result = (await c.request("session/transcript", {
+        sessionId: sid,
+      })) as {
+        sessionId?: string;
+        title?: string;
+        messages?: Array<{ role?: string; content?: string; title?: string }>;
+      };
+      messages = (result.messages ?? []).map((m) => ({
+        role: String(m.role || ""),
+        content: String(m.content || ""),
+        title: m.title != null ? String(m.title) : "",
+      }));
+      title = result.title || sid;
+      exportSessionId = result.sessionId || sid;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Failed to load session transcript: ${msg}`);
+      return;
+    }
+  } else if ((!messages.length || !messages.some((m) => m.role === "user" || m.role === "assistant")) && sid) {
+    // Current session id known but chat empty — pull from disk.
+    try {
+      const c = await ensureClient();
+      const result = (await c.request("session/transcript", {
+        sessionId: sid,
+      })) as {
+        sessionId?: string;
+        title?: string;
+        messages?: Array<{ role?: string; content?: string; title?: string }>;
+      };
+      if (result.messages?.length) {
+        messages = result.messages.map((m) => ({
+          role: String(m.role || ""),
+          content: String(m.content || ""),
+          title: m.title != null ? String(m.title) : "",
+        }));
+        title = result.title || title;
+        exportSessionId = result.sessionId || sid;
+      }
+    } catch {
+      // Fall through with whatever is in the live transcript.
+    }
+  }
+
+  if (!messages.length) {
+    vscode.window.showWarningMessage("Nothing to export — transcript is empty.");
+    return;
+  }
+
+  const markdown = messagesToMarkdown(messages, {
+    title,
+    sessionId: exportSessionId,
+  });
+  const defaultUri = vscode.Uri.joinPath(
+    vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir()),
+    transcriptFilename(title)
+  );
+  const uri = await vscode.window.showSaveDialog({
+    defaultUri,
+    filters: { Markdown: ["md"] },
+    saveLabel: "Export Transcript",
+    title: "Export iCode Transcript",
+  });
+  if (!uri) {
+    return;
+  }
+  await vscode.workspace.fs.writeFile(uri, Buffer.from(markdown, "utf8"));
+  const open = "Open";
+  const choice = await vscode.window.showInformationMessage(
+    `Exported transcript to ${vscode.workspace.asRelativePath(uri)}`,
+    open
+  );
+  if (choice === open) {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, { preview: false });
+  }
 }
 
 async function deleteSession(arg?: unknown, selected?: unknown): Promise<void> {

@@ -6,8 +6,9 @@ Stdout carries **only** newline-delimited JSON-RPC 2.0 messages.
 Logs and diagnostics must go to stderr.
 
 Implements: ``initialize``, ``session/new``, ``session/load``,
-``session/list``, ``session/prompt``, ``session/cancel``, ``session/close``,
-``session/approve``, ``session/diff``, ``session/delete``, ``shutdown``.
+``session/transcript``, ``session/list``, ``session/prompt``,
+``session/cancel``, ``session/close``, ``session/approve``,
+``session/diff``, ``session/delete``, ``shutdown``.
 Streaming updates: agent message, thinking, tool call/result, usage,
 permission requests.
 """
@@ -165,6 +166,8 @@ class AcpServer:
             return await self._session_new(params)
         if method in {"session/load", "loadSession"}:
             return await self._session_load(params)
+        if method in {"session/transcript", "sessionTranscript"}:
+            return await self._session_transcript(params)
         if method in {"session/list", "listSessions"}:
             return await self._session_list(params)
         if method in {"session/prompt", "prompt"}:
@@ -253,6 +256,23 @@ class AcpServer:
             "sessionId": sid,
             "title": session.title,
             "messageCount": len(session.messages),
+            "model": session.model,
+            "messages": self._session_messages_for_client(store, sid, session),
+        }
+
+    async def _session_transcript(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Return chat timeline for a session without switching the active session."""
+        sid = str(params.get("sessionId") or params.get("session_id") or "").strip()
+        if not sid:
+            raise AcpProtocolError(-32602, "sessionId required")
+        store = self._store()
+        try:
+            session = store.load_session(sid)
+        except FileNotFoundError as exc:
+            raise AcpProtocolError(-32000, f"session not found: {sid}") from exc
+        return {
+            "sessionId": sid,
+            "title": session.title,
             "model": session.model,
             "messages": self._session_messages_for_client(store, sid, session),
         }

@@ -8,6 +8,7 @@ export interface ChatHandlers {
   onClearAttachment?: () => void;
   onPickSession?: () => void;
   onNewSession?: () => void;
+  onExportTranscript?: () => void;
 }
 
 interface TranscriptLine {
@@ -117,6 +118,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.handlers.onPickSession?.();
         } else if (msg.type === "newSession") {
           this.handlers.onNewSession?.();
+        } else if (msg.type === "exportTranscript") {
+          this.handlers.onExportTranscript?.();
         } else if (msg.type === "ready") {
           this.pushSettingsTo(webview);
           this.restoreTranscriptTo(webview);
@@ -186,6 +189,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   setSessionInfo(title: string | undefined): void {
     this.sessionTitle = (title || "").trim();
     this.pushSessionInfo();
+  }
+
+  getSessionTitle(): string {
+    return this.sessionTitle;
+  }
+
+  /** Snapshot of the in-memory transcript (after flushing open bubbles). */
+  getTranscriptMessages(): Array<{
+    role: string;
+    content: string;
+    title: string;
+  }> {
+    this.finalizeOpenBubbles();
+    return this.transcript.map((line) => ({
+      role: line.role,
+      content: line.content,
+      title: line.title || "",
+    }));
   }
 
   private pushSessionInfo(): void {
@@ -485,6 +506,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <div id="toolbar">
       <button id="sessions" class="secondary" title="Load a past session">Sessions</button>
       <button id="newSession" class="secondary" title="Start a new session">New</button>
+      <button id="exportTranscript" class="secondary" title="Export transcript as Markdown">Export</button>
       <span id="sessionInfo"></span>
     </div>
     <div id="attach">
@@ -510,6 +532,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const cancelBtn = document.getElementById('cancel');
     const sessionsBtn = document.getElementById('sessions');
     const newSessionBtn = document.getElementById('newSession');
+    const exportBtn = document.getElementById('exportTranscript');
     const sessionInfo = document.getElementById('sessionInfo');
     const hint = document.getElementById('hint');
     const attachEl = document.getElementById('attach');
@@ -557,6 +580,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
     sessionsBtn.addEventListener('click', () => vscode.postMessage({ type: 'pickSession' }));
     newSessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'newSession' }));
+    if (exportBtn) {
+      exportBtn.addEventListener('click', () => vscode.postMessage({ type: 'exportTranscript' }));
+    }
 
     function isMac() {
       return navigator.platform.toUpperCase().indexOf('MAC') >= 0;

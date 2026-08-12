@@ -338,6 +338,47 @@ async def test_session_approve_and_diff() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_transcript_does_not_require_open_session(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore(store_dir=tmp_path / "sessions")
+    sess = store.new_session("acp-tr1", "m")
+    sess.title = "Export me"
+    store.add_message("user", "hello transcript")
+    store.add_message("assistant", "hi there")
+    store.save_current()
+
+    out = _Capture()
+    server = AcpServer(demo=True, stdout=out)  # type: ignore[arg-type]
+    server._default_store = store
+
+    await server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/transcript",
+            "params": {"sessionId": "acp-tr1"},
+        }
+    )
+    result = out.lines()[-1]["result"]
+    assert result["sessionId"] == "acp-tr1"
+    assert result["title"] == "Export me"
+    assert any(m.get("role") == "user" for m in result["messages"])
+    assert "acp-tr1" not in server._sessions
+
+    await server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "sessionTranscript",
+            "params": {"sessionId": "missing"},
+        }
+    )
+    assert out.lines()[-1]["error"]["code"] == -32000
+    await server.close_all()
+
+
+@pytest.mark.asyncio
 async def test_session_delete(tmp_path: Path) -> None:
     store = SessionStore(store_dir=tmp_path / "sessions")
     store.new_session("acp-del1", "m")
