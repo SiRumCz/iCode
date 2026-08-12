@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openjiuwen-icode"
-version = "0.1.3"
+version = "0.1.21"
 description = "iCode — EventBus coding assistant (CLI / TUI / ACP) on the openjiuwen SDK"
 readme = "README.md"
 license = "Apache-2.0"
