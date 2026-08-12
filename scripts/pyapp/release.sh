@@ -35,7 +35,8 @@
 #
 # Remotes: development / primary = origin (GitCode). Mirror publish = github.
 # After a successful build, asks whether to publish artifacts unless
-# --publish / --no-publish is set. GitCode needs GITCODE_TOKEN; GitHub needs
+# --publish / --no-publish is set. Default answer is yes; if the prompt times
+# out with no input, uploads proceed. GitCode needs GITCODE_TOKEN; GitHub needs
 # `gh` auth (or GH_TOKEN). Uploads run concurrently in the background.
 #
 # macOS binaries require a Darwin host; Linux targets use Docker when available.
@@ -61,6 +62,8 @@ FORCE_TAG=false
 PUBLISH_MODE="ask"   # ask | yes | no
 # Wall-clock timeout for concurrent GitCode+GitHub artifact uploads (seconds).
 PUBLISH_TIMEOUT_SEC="${PUBLISH_TIMEOUT_SEC:-600}"
+# Seconds to wait for the interactive publish prompt; empty/timeout => upload.
+PUBLISH_PROMPT_TIMEOUT_SEC="${PUBLISH_PROMPT_TIMEOUT_SEC:-30}"
 # Primary = GitCode (origin). Mirror = GitHub sync/publish remote.
 PRIMARY_REMOTE="${PRIMARY_REMOTE:-origin}"
 MIRROR_REMOTE="${MIRROR_REMOTE:-github}"
@@ -82,6 +85,9 @@ Git:
   --publish                  Upload build artifacts to GitCode + GitHub releases
   --no-publish               Do not upload releases (skip the prompt)
   --publish-timeout SEC      Upload wall-clock timeout (default: 600 = 10m)
+  --publish-prompt-timeout SEC
+                             Seconds to wait for Y/n publish prompt (default: 30;
+                             empty Enter or timeout defaults to upload)
 
 Build:
   --uv                       Use uv installer in slim PyApp binaries
@@ -142,6 +148,13 @@ while [[ $# -gt 0 ]]; do
             PUBLISH_TIMEOUT_SEC="$2"
             [[ "$PUBLISH_TIMEOUT_SEC" =~ ^[0-9]+$ ]] \
                 || pyapp_die "--publish-timeout must be an integer number of seconds"
+            shift 2
+            ;;
+        --publish-prompt-timeout)
+            [[ $# -ge 2 ]] || pyapp_die "--publish-prompt-timeout requires seconds"
+            PUBLISH_PROMPT_TIMEOUT_SEC="$2"
+            [[ "$PUBLISH_PROMPT_TIMEOUT_SEC" =~ ^[0-9]+$ ]] \
+                || pyapp_die "--publish-prompt-timeout must be an integer number of seconds"
             shift 2
             ;;
         --out-dir)
@@ -442,8 +455,9 @@ tag_and_push_release() {
 }
 
 maybe_publish_releases() {
-    # Ask once, then upload to GitCode + GitHub concurrently in the background.
-    # Wall-clock timeout (default 10m) kills any still-running upload and warns.
+    # Ask once (default yes), then upload to GitCode + GitHub concurrently.
+    # Prompt timeout / empty Enter => publish. Upload wall-clock timeout
+    # (default 10m) kills any still-running upload and warns.
     local version="$1"
     local artifact_dir="$2"
     local answer=""
@@ -452,6 +466,7 @@ maybe_publish_releases() {
     local have_gitcode=false have_github=false
     local timed_out=false
     local deadline
+    local read_rc=0
 
     case "$PUBLISH_MODE" in
         no)
@@ -463,14 +478,28 @@ maybe_publish_releases() {
             ;;
         ask)
             if [[ ! -t 0 ]]; then
-                pyapp_log "Non-interactive stdin; skip release publish (pass --publish to force)"
-                return 0
+                pyapp_log "Non-interactive stdin; defaulting to publish (pass --no-publish to skip)"
+                answer="y"
+            else
+                echo
+                echo "Build artifacts are ready in: $artifact_dir"
+                ls -la "$artifact_dir" || true
+                echo
+                # -t: on timeout, exit status > 128 and answer stays empty → default yes.
+                set +e
+                read -r -t "$PUBLISH_PROMPT_TIMEOUT_SEC" \
+                    -p "Publish these files as release ${tag} on GitCode + GitHub? [Y/n] (default Y, ${PUBLISH_PROMPT_TIMEOUT_SEC}s) " \
+                    answer
+                read_rc=$?
+                set -e
+                if (( read_rc > 128 )); then
+                    echo
+                    pyapp_log "No answer within ${PUBLISH_PROMPT_TIMEOUT_SEC}s; defaulting to publish"
+                    answer="y"
+                elif [[ -z "${answer}" ]]; then
+                    answer="y"
+                fi
             fi
-            echo
-            echo "Build artifacts are ready in: $artifact_dir"
-            ls -la "$artifact_dir" || true
-            echo
-            read -r -p "Publish these files as release ${tag} on GitCode + GitHub? [y/N] " answer
             ;;
         *)
             pyapp_die "internal error: unknown PUBLISH_MODE=$PUBLISH_MODE"
@@ -478,10 +507,14 @@ maybe_publish_releases() {
     esac
 
     case "${answer}" in
-        y|Y|yes|YES|Yes) ;;
-        *)
+        n|N|no|NO|No)
             pyapp_log "Not publishing releases"
             return 0
+            ;;
+        ""|y|Y|yes|YES|Yes)
+            ;;
+        *)
+            pyapp_log "Unrecognized answer '${answer}'; defaulting to publish"
             ;;
     esac
 
@@ -739,7 +772,7 @@ pyapp_log "Current version: pyproject=${CLI_PKG_VERSION} extension=${EXT_VERSION
 pyapp_log "Release version: $NEW_VERSION"
 pyapp_log "Output dir:      $OUT_DIR"
 pyapp_log "Git tag/push:    tag=$([[ "$DO_TAG" == "true" ]] && echo v${NEW_VERSION} || echo skip) push=$([[ "$DO_PUSH" == "true" ]] && echo "${PRIMARY_REMOTE}+${MIRROR_REMOTE}" || echo no)"
-pyapp_log "Release publish: $PUBLISH_MODE (GitCode + GitHub concurrent, timeout ${PUBLISH_TIMEOUT_SEC}s)"
+pyapp_log "Release publish: $PUBLISH_MODE (default Y / prompt ${PUBLISH_PROMPT_TIMEOUT_SEC}s; upload timeout ${PUBLISH_TIMEOUT_SEC}s)"
 if [[ "$DRY_RUN" == "true" ]]; then
     pyapp_log "Dry run only — no writes, commit, tag, push, build, or publish"
     exit 0

@@ -47,10 +47,13 @@ Optional:
 
 After binaries are collected, `release.sh` asks whether to upload them as a
 **GitCode + GitHub** release for `vX.Y.Z` (or use `--publish` / `--no-publish`).
-The two uploads run **concurrently** in the background (default wall-clock
-timeout **10 minutes**, overridable with `--publish-timeout SEC` or
-`PUBLISH_TIMEOUT_SEC`). On timeout remaining jobs are killed and a warning is
-printed; local artifacts under `dist/release/` are kept.
+Default is **yes**: Enter with no input, or no answer within
+`PUBLISH_PROMPT_TIMEOUT_SEC` (default **30s**, flag
+`--publish-prompt-timeout`), proceeds to upload. The two uploads run
+**concurrently** in the background (default wall-clock timeout **10 minutes**,
+overridable with `--publish-timeout SEC` or `PUBLISH_TIMEOUT_SEC`). On upload
+timeout remaining jobs are killed and a warning is printed; local artifacts
+under `dist/release/` are kept.
 
 ```bash
 export GITCODE_TOKEN=...   # GitCode PAT with release permissions
