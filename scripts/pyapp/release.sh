@@ -59,6 +59,8 @@ DO_TAG=true
 DO_PUSH=true
 FORCE_TAG=false
 PUBLISH_MODE="ask"   # ask | yes | no
+# Wall-clock timeout for concurrent GitCode+GitHub artifact uploads (seconds).
+PUBLISH_TIMEOUT_SEC="${PUBLISH_TIMEOUT_SEC:-600}"
 # Primary = GitCode (origin). Mirror = GitHub sync/publish remote.
 PRIMARY_REMOTE="${PRIMARY_REMOTE:-origin}"
 MIRROR_REMOTE="${MIRROR_REMOTE:-github}"
@@ -79,6 +81,7 @@ Git:
   --force-tag                Recreate tag on HEAD if it already exists elsewhere
   --publish                  Upload build artifacts to GitCode + GitHub releases
   --no-publish               Do not upload releases (skip the prompt)
+  --publish-timeout SEC      Upload wall-clock timeout (default: 600 = 10m)
 
 Build:
   --uv                       Use uv installer in slim PyApp binaries
@@ -134,6 +137,13 @@ while [[ $# -gt 0 ]]; do
         --force-tag) FORCE_TAG=true; shift ;;
         --publish) PUBLISH_MODE="yes"; shift ;;
         --no-publish) PUBLISH_MODE="no"; shift ;;
+        --publish-timeout)
+            [[ $# -ge 2 ]] || pyapp_die "--publish-timeout requires seconds"
+            PUBLISH_TIMEOUT_SEC="$2"
+            [[ "$PUBLISH_TIMEOUT_SEC" =~ ^[0-9]+$ ]] \
+                || pyapp_die "--publish-timeout must be an integer number of seconds"
+            shift 2
+            ;;
         --out-dir)
             [[ $# -ge 2 ]] || pyapp_die "--out-dir requires a path"
             OUT_DIR="$2"
@@ -433,12 +443,15 @@ tag_and_push_release() {
 
 maybe_publish_releases() {
     # Ask once, then upload to GitCode + GitHub concurrently in the background.
+    # Wall-clock timeout (default 10m) kills any still-running upload and warns.
     local version="$1"
     local artifact_dir="$2"
     local answer=""
     local tag="v${version}"
     local work_dir log_gc log_gh pid_gc pid_gh rc_gc rc_gh
     local have_gitcode=false have_github=false
+    local timed_out=false
+    local deadline
 
     case "$PUBLISH_MODE" in
         no)
@@ -501,7 +514,9 @@ maybe_publish_releases() {
     rc_gc=0
     rc_gh=0
 
-    pyapp_log "Starting concurrent release uploads..."
+    # Job control so each upload is its own process group (clean kill on timeout).
+    set -m
+    pyapp_log "Starting concurrent release uploads (timeout ${PUBLISH_TIMEOUT_SEC}s)..."
     if [[ "$have_gitcode" == "true" ]]; then
         (
             "$SCRIPT_DIR/publish-gitcode-release.sh" "$version" "$artifact_dir"
@@ -517,24 +532,72 @@ maybe_publish_releases() {
         pyapp_log "GitHub upload pid=${pid_gh} (log: $log_gh)"
     fi
 
+    deadline=$((SECONDS + PUBLISH_TIMEOUT_SEC))
+    while true; do
+        local still=false
+        if [[ -n "$pid_gc" ]] && kill -0 "$pid_gc" 2>/dev/null; then
+            still=true
+        fi
+        if [[ -n "$pid_gh" ]] && kill -0 "$pid_gh" 2>/dev/null; then
+            still=true
+        fi
+        if [[ "$still" != "true" ]]; then
+            break
+        fi
+        if (( SECONDS >= deadline )); then
+            timed_out=true
+            echo "Warning: release artifact upload timed out after ${PUBLISH_TIMEOUT_SEC}s; stopping remaining jobs." >&2
+            if [[ -n "$pid_gc" ]] && kill -0 "$pid_gc" 2>/dev/null; then
+                kill -TERM -"$pid_gc" 2>/dev/null || kill -TERM "$pid_gc" 2>/dev/null || true
+            fi
+            if [[ -n "$pid_gh" ]] && kill -0 "$pid_gh" 2>/dev/null; then
+                kill -TERM -"$pid_gh" 2>/dev/null || kill -TERM "$pid_gh" 2>/dev/null || true
+            fi
+            sleep 2
+            if [[ -n "$pid_gc" ]] && kill -0 "$pid_gc" 2>/dev/null; then
+                kill -KILL -"$pid_gc" 2>/dev/null || kill -KILL "$pid_gc" 2>/dev/null || true
+            fi
+            if [[ -n "$pid_gh" ]] && kill -0 "$pid_gh" 2>/dev/null; then
+                kill -KILL -"$pid_gh" 2>/dev/null || kill -KILL "$pid_gh" 2>/dev/null || true
+            fi
+            break
+        fi
+        sleep 1
+    done
+
     if [[ -n "$pid_gc" ]]; then
-        if wait "$pid_gc"; then
+        if wait "$pid_gc" 2>/dev/null; then
             rc_gc=0
             pyapp_log "GitCode publish OK"
         else
             rc_gc=$?
-            echo "GitCode publish FAILED (exit ${rc_gc}). Log:" >&2
-            cat "$log_gc" >&2 || true
+            if [[ "$timed_out" == "true" ]] && ! kill -0 "$pid_gc" 2>/dev/null; then
+                # Distinguish timeout kill from a normal script failure when possible.
+                if [[ "$rc_gc" -eq 143 || "$rc_gc" -eq 137 || "$rc_gc" -eq 15 || "$rc_gc" -eq 9 ]]; then
+                    echo "Warning: GitCode publish stopped by timeout." >&2
+                else
+                    echo "GitCode publish FAILED (exit ${rc_gc}). Log:" >&2
+                    cat "$log_gc" >&2 || true
+                fi
+            else
+                echo "GitCode publish FAILED (exit ${rc_gc}). Log:" >&2
+                cat "$log_gc" >&2 || true
+            fi
         fi
     fi
     if [[ -n "$pid_gh" ]]; then
-        if wait "$pid_gh"; then
+        if wait "$pid_gh" 2>/dev/null; then
             rc_gh=0
             pyapp_log "GitHub publish OK"
         else
             rc_gh=$?
-            echo "GitHub publish FAILED (exit ${rc_gh}). Log:" >&2
-            cat "$log_gh" >&2 || true
+            if [[ "$timed_out" == "true" ]] \
+                && [[ "$rc_gh" -eq 143 || "$rc_gh" -eq 137 || "$rc_gh" -eq 15 || "$rc_gh" -eq 9 ]]; then
+                echo "Warning: GitHub publish stopped by timeout." >&2
+            else
+                echo "GitHub publish FAILED (exit ${rc_gh}). Log:" >&2
+                cat "$log_gh" >&2 || true
+            fi
         fi
     fi
 
@@ -547,6 +610,13 @@ maybe_publish_releases() {
     fi
 
     rm -rf "$work_dir"
+
+    if [[ "$timed_out" == "true" ]]; then
+        echo "Warning: release upload incomplete due to timeout; local artifacts remain in ${artifact_dir}" >&2
+        echo "  Re-run: ./scripts/pyapp/publish-gitcode-release.sh ${version} ${artifact_dir}" >&2
+        echo "           ./scripts/pyapp/publish-github-release.sh ${version} ${artifact_dir}" >&2
+        return 0
+    fi
 
     if [[ "$rc_gc" -ne 0 || "$rc_gh" -ne 0 ]]; then
         return 1
@@ -669,7 +739,7 @@ pyapp_log "Current version: pyproject=${CLI_PKG_VERSION} extension=${EXT_VERSION
 pyapp_log "Release version: $NEW_VERSION"
 pyapp_log "Output dir:      $OUT_DIR"
 pyapp_log "Git tag/push:    tag=$([[ "$DO_TAG" == "true" ]] && echo v${NEW_VERSION} || echo skip) push=$([[ "$DO_PUSH" == "true" ]] && echo "${PRIMARY_REMOTE}+${MIRROR_REMOTE}" || echo no)"
-pyapp_log "Release publish: $PUBLISH_MODE (GitCode + GitHub concurrent)"
+pyapp_log "Release publish: $PUBLISH_MODE (GitCode + GitHub concurrent, timeout ${PUBLISH_TIMEOUT_SEC}s)"
 if [[ "$DRY_RUN" == "true" ]]; then
     pyapp_log "Dry run only — no writes, commit, tag, push, build, or publish"
     exit 0
