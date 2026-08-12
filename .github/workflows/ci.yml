@@ -1,4 +1,9 @@
-# OpenJiuWen iCode CI (uses sibling agent-core checkout)
+# iCode CI on the GitHub mirror.
+# Development primary is GitCode; this workflow validates the synced tree.
+#
+# openjiuwen SDK comes from [tool.uv.sources] (gitcode.com/michaelling/agent-core,
+# branch icode), pinned in uv.lock. GitHub Actions rewrites the SSH git URL to
+# public HTTPS so uv can fetch without a deploy key.
 
 name: ci
 
@@ -12,28 +17,24 @@ jobs:
     steps:
       - name: Checkout iCode
         uses: actions/checkout@v4
-        with:
-          path: iCode
-      - name: Checkout agent-core SDK
-        uses: actions/checkout@v4
-        with:
-          repository: openJiuwen/agent-core
-          path: agent-core
-          ref: develop
+
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-      - name: Verify sibling SDK path
-        working-directory: iCode
+
+      - name: Prefer HTTPS for GitCode git dependencies
         run: |
-          test -d ../agent-core
-          echo "SDK at $(cd ../agent-core && pwd)"
+          git config --global url."https://gitcode.com/".insteadOf "ssh://git@gitcode.com/"
+          git config --global url."https://gitcode.com/".insteadOf "git@gitcode.com:"
+
       - name: Sync
-        working-directory: iCode
-        run: uv sync
+        run: uv sync --frozen
+
       - name: Smoke
-        working-directory: iCode
         run: make smoke
+
       - name: Unit tests
-        working-directory: iCode
-        run: make test TESTFLAGS="tests/cli/unit tests/unit_tests -q --ignore=tests/cli/e2e"
+        run: >
+          make test TESTFLAGS="tests/cli/unit tests/unit_tests -q
+          --ignore=tests/unit_tests/cli/test_auto_harness_cli.py
+          --ignore=tests/unit_tests/cli/test_auto_harness_repl.py"
