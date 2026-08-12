@@ -6,6 +6,8 @@ export interface ChatHandlers {
   onCancel: () => void;
   onApprove: (interactionId: string, approved: boolean) => void;
   onClearAttachment?: () => void;
+  onPickSession?: () => void;
+  onNewSession?: () => void;
 }
 
 interface TranscriptLine {
@@ -29,6 +31,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private openAssistant?: TranscriptLine;
   private openThought?: TranscriptLine;
   private attachmentLabel = "";
+  private sessionTitle = "";
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -110,9 +113,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.handlers.onApprove(msg.interactionId, Boolean(msg.approved));
         } else if (msg.type === "clearAttachment") {
           this.handlers.onClearAttachment?.();
+        } else if (msg.type === "pickSession") {
+          this.handlers.onPickSession?.();
+        } else if (msg.type === "newSession") {
+          this.handlers.onNewSession?.();
         } else if (msg.type === "ready") {
           this.pushSettingsTo(webview);
           this.restoreTranscriptTo(webview);
+          this.pushSessionInfoTo(webview);
         }
       }
     );
@@ -176,7 +184,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   clear(): void {
     this.finalizeOpenBubbles();
     this.transcript = [];
+    this.sessionTitle = "";
     this.post({ type: "clear" });
+    this.pushSessionInfo();
+  }
+
+  /** Update the session label shown above the composer. */
+  setSessionInfo(title: string | undefined): void {
+    this.sessionTitle = (title || "").trim();
+    this.pushSessionInfo();
+  }
+
+  private pushSessionInfo(): void {
+    this.post({
+      type: "sessionInfo",
+      title: this.sessionTitle,
+    });
+  }
+
+  private pushSessionInfoTo(webview: vscode.Webview): void {
+    void webview.postMessage({
+      type: "sessionInfo",
+      title: this.sessionTitle,
+    });
   }
 
   postUser(text: string): void {
@@ -366,6 +396,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     .thought .label { font-style: normal; opacity: 0.8; margin-bottom: 4px; display: block; }
     .permission { border: 1px solid var(--vscode-inputValidation-warningBorder, orange); padding: 8px; border-radius: 6px; }
     #composer { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; flex-shrink: 0; }
+    #toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    #sessionInfo {
+      flex: 1; min-width: 0; font-size: 0.85em; opacity: 0.85;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     #attach {
       display: none; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px;
       background: var(--vscode-badge-background, rgba(128,128,128,.25));
@@ -388,6 +423,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <body>
   <div id="log"></div>
   <div id="composer">
+    <div id="toolbar">
+      <button id="sessions" class="secondary" title="Load a past session">Sessions</button>
+      <button id="newSession" class="secondary" title="Start a new session">New</button>
+      <span id="sessionInfo"></span>
+    </div>
     <div id="attach">
       <span id="attachLabel"></span>
       <button id="attachClear" class="secondary" title="Remove attachment">×</button>
@@ -409,6 +449,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('send');
     const cancelBtn = document.getElementById('cancel');
+    const sessionsBtn = document.getElementById('sessions');
+    const newSessionBtn = document.getElementById('newSession');
+    const sessionInfo = document.getElementById('sessionInfo');
     const hint = document.getElementById('hint');
     const attachEl = document.getElementById('attach');
     const attachLabel = document.getElementById('attachLabel');
@@ -421,6 +464,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (typeof marked !== 'undefined' && marked.setOptions) {
       marked.setOptions({ gfm: true, breaks: true });
+    }
+
+    function showSessionInfo(title) {
+      if (!sessionInfo) return;
+      sessionInfo.textContent = title ? ('Session: ' + title) : '';
+      sessionInfo.title = title || '';
     }
 
     function showAttachment(label) {
@@ -437,6 +486,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       showAttachment('');
       vscode.postMessage({ type: 'clearAttachment' });
     });
+    sessionsBtn.addEventListener('click', () => vscode.postMessage({ type: 'pickSession' }));
+    newSessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'newSession' }));
 
     function isMac() {
       return navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -643,9 +694,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           assistantEl = null;
           thoughtBody = null;
           showAttachment('');
+          showSessionInfo('');
           break;
         case 'attachment':
           showAttachment(msg.label || '');
+          break;
+        case 'sessionInfo':
+          showSessionInfo(msg.title || '');
           break;
         case 'history': {
           log.innerHTML = '';

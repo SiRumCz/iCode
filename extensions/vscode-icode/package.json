@@ -2,7 +2,7 @@
   "name": "icode",
   "displayName": "iCode",
   "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "publisher": "openjiuwen",
   "license": "Apache-2.0",
   "repository": {
@@ -34,7 +34,8 @@
     "onCommand:icode.attachActiveFile",
     "onCommand:icode.addSelectionToChat",
     "onCommand:icode.deleteSession",
-    "onCommand:icode.loadSession"
+    "onCommand:icode.loadSession",
+    "onCommand:icode.pickSession"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -108,6 +109,11 @@
         "title": "iCode: Load Session"
       },
       {
+        "command": "icode.pickSession",
+        "title": "iCode: Pick Session…",
+        "icon": "$(history)"
+      },
+      {
         "command": "icode.deleteSession",
         "title": "iCode: Delete Session(s)",
         "icon": "$(trash)"
@@ -128,9 +134,14 @@
           "group": "navigation@1"
         },
         {
-          "command": "icode.newSession",
+          "command": "icode.pickSession",
           "when": "view == icode.chatView",
           "group": "navigation@2"
+        },
+        {
+          "command": "icode.newSession",
+          "when": "view == icode.chatView",
+          "group": "navigation@3"
         },
         {
           "command": "icode.refreshSessions",

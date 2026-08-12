@@ -33,6 +33,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     onApprove: (interactionId, approved) =>
       void approvePermission(interactionId, approved),
     onClearAttachment: () => clearAttachment(),
+    onPickSession: () => void pickSession(),
+    onNewSession: () => void newSession(),
   });
 
   sessions = new SessionsTreeProvider(() => listSessions());
@@ -83,6 +85,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void addSelectionToChat()
     ),
     vscode.commands.registerCommand("icode.refreshSessions", () => sessions.refresh()),
+    vscode.commands.registerCommand("icode.pickSession", () => void pickSession()),
     vscode.commands.registerCommand(
       "icode.loadSession",
       (arg?: unknown) => void loadSession(resolveSessionId(arg))
@@ -268,6 +271,7 @@ async function ensureSession(): Promise<{
     };
     currentSessionId = result.sessionId;
     chat.postSystem(`Session ${currentSessionId}`);
+    chat.setSessionInfo(currentSessionId);
     sessions.refresh();
   }
   return { client: c, sessionId: currentSessionId };
@@ -288,6 +292,7 @@ async function newSession(): Promise<void> {
   };
   currentSessionId = result.sessionId;
   chat.clear();
+  chat.setSessionInfo(currentSessionId);
   chat.postSystem(`New session ${currentSessionId}`);
   sessions.refresh();
 }
@@ -298,6 +303,36 @@ function resolveSessionId(arg?: unknown): string | undefined {
     return fromArg;
   }
   return sessionIdFromArg(sessionsView?.selection?.[0]);
+}
+
+async function pickSession(): Promise<void> {
+  const rows = await listSessions();
+  if (!rows.length) {
+    vscode.window.showInformationMessage("No saved sessions yet.");
+    return;
+  }
+  type Item = vscode.QuickPickItem & { sessionId: string };
+  const items: Item[] = rows.map((r) => {
+    const short =
+      r.sessionId.length > 8 ? r.sessionId.slice(-8) : r.sessionId;
+    const title = r.title || r.sessionId;
+    return {
+      label: title,
+      description: r.model ? `${r.model} · ${short}` : short,
+      detail: r.updatedAt ? `Updated ${r.updatedAt}` : r.sessionId,
+      sessionId: r.sessionId,
+    };
+  });
+  const picked = await vscode.window.showQuickPick(items, {
+    title: "Load iCode Session",
+    placeHolder: "Select a session to load into Chat",
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+  if (!picked) {
+    return;
+  }
+  await loadSession(picked.sessionId);
 }
 
 async function loadSession(sessionId?: string): Promise<void> {
@@ -315,6 +350,7 @@ async function loadSession(sessionId?: string): Promise<void> {
   const messages = result.messages ?? [];
   chat.loadHistory(messages);
   const title = result.title || currentSessionId;
+  chat.setSessionInfo(title);
   chat.postSystem(
     messages.length
       ? `Loaded “${title}” (${messages.length} messages)`
