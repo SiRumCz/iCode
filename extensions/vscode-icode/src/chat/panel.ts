@@ -411,31 +411,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       padding-left: 8px;
     }
     .system { opacity: 0.85; font-size: 0.9em; }
-    .tool-group {
-      opacity: 0.95; font-size: 0.9em;
-      background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,.12));
-      border-radius: 6px; padding: 0;
+    .work-fold {
+      opacity: 0.92; font-size: 0.9em; padding: 0; background: transparent;
     }
-    .tool-group > summary,
+    .work-fold > summary,
     .tool-item > summary {
-      cursor: pointer; list-style: none; padding: 8px 10px;
+      cursor: pointer; list-style: none; padding: 4px 2px;
       display: flex; align-items: center; gap: 6px;
       user-select: none;
     }
-    .tool-group > summary::-webkit-details-marker,
+    .work-fold > summary { opacity: 0.78; padding: 2px 2px; }
+    .work-fold > summary::-webkit-details-marker,
     .tool-item > summary::-webkit-details-marker { display: none; }
-    .tool-group > summary::before,
+    .work-fold > summary::before,
     .tool-item > summary::before {
       content: '▸'; flex-shrink: 0; opacity: 0.7;
     }
-    .tool-group[open] > summary::before,
+    .work-fold[open] > summary::before,
     .tool-item[open] > summary::before { content: '▾'; }
-    .tool-group-title, .tool-item-title {
+    .work-fold-title, .tool-item-title {
       flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .tool-group-body { padding: 0 6px 6px 6px; display: flex; flex-direction: column; gap: 4px; }
+    .work-fold-body {
+      padding: 2px 0 6px 12px; margin: 2px 0 0 4px;
+      display: flex; flex-direction: column; gap: 4px;
+      border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,.35));
+    }
     .tool-item {
-      background: var(--vscode-input-background, rgba(0,0,0,.15));
+      background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,.12));
       border-radius: 4px;
     }
     .tool-item > summary { padding: 6px 8px; font-size: 0.95em; }
@@ -514,11 +517,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const attachClear = document.getElementById('attachClear');
     let assistantEl = null;
     let thoughtBody = null;
-    let toolGroupEl = null;
-    let toolGroupBody = null;
-    let toolGroupTitleEl = null;
-    let toolItemCount = 0;
-    const pendingToolItems = new Map(); // name -> [detailsEl, ...]
+    let workFoldEl = null;
+    let workFoldBody = null;
+    let workFoldTitleEl = null;
+    let workFoldActive = false;
+    let workFoldStartedAt = 0;
+    let workFoldTimer = null;
+    let workFoldToolCount = 0;
+    let workFoldHasThought = false;
+    let replaying = false;
+    const pendingToolItems = new Map(); // name|id -> [detailsEl, ...]
     let submitKeybinding = ${JSON.stringify(initial)};
     let imeComposing = false;
     let suppressEnterUntil = 0;
@@ -709,40 +717,105 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       setMarkdown(el, (el.dataset.raw || '') + (chunk || ''));
     }
 
-    function closeToolGroup() {
-      toolGroupEl = null;
-      toolGroupBody = null;
-      toolGroupTitleEl = null;
-      toolItemCount = 0;
+    function formatDuration(ms) {
+      const s = Math.max(1, Math.round(ms / 1000));
+      return s + 's';
+    }
+
+    function updateWorkFoldTitle(final) {
+      if (!workFoldTitleEl) return;
+      const elapsed = workFoldStartedAt ? (Date.now() - workFoldStartedAt) : 0;
+      if (!final) {
+        workFoldTitleEl.textContent = workFoldStartedAt
+          ? ('Working · ' + formatDuration(elapsed))
+          : 'Working…';
+        return;
+      }
+      const dur = workFoldStartedAt ? formatDuration(elapsed) : '';
+      if (workFoldToolCount === 0 && workFoldHasThought) {
+        workFoldTitleEl.textContent = dur ? ('Thought for ' + dur) : 'Thought';
+      } else if (dur) {
+        workFoldTitleEl.textContent = 'Worked for ' + dur;
+      } else if (workFoldToolCount > 0) {
+        workFoldTitleEl.textContent = workFoldToolCount === 1
+          ? '1 tool call'
+          : (workFoldToolCount + ' tool calls');
+      } else {
+        workFoldTitleEl.textContent = 'Worked';
+      }
+    }
+
+    function sealWorkFold() {
+      if (workFoldTimer) {
+        clearInterval(workFoldTimer);
+        workFoldTimer = null;
+      }
+      if (workFoldActive) {
+        updateWorkFoldTitle(true);
+      }
+      workFoldActive = false;
+      workFoldEl = null;
+      workFoldBody = null;
+      workFoldTitleEl = null;
+      workFoldStartedAt = 0;
+      workFoldToolCount = 0;
+      workFoldHasThought = false;
       pendingToolItems.clear();
     }
 
-    function updateToolGroupTitle() {
-      if (!toolGroupTitleEl) return;
-      const n = toolItemCount;
-      toolGroupTitleEl.textContent = n === 1 ? '1 tool call' : (n + ' tool calls');
-    }
-
-    function ensureToolGroup() {
-      if (toolGroupEl && toolGroupBody) return;
+    function ensureWorkFold() {
+      if (workFoldEl && workFoldBody && workFoldActive) return;
       assistantEl = null;
-      thoughtBody = null;
       const details = document.createElement('details');
-      details.className = 'msg tool-group';
+      details.className = 'msg work-fold';
       const summary = document.createElement('summary');
       const titleEl = document.createElement('span');
-      titleEl.className = 'tool-group-title';
-      titleEl.textContent = 'Tool calls';
+      titleEl.className = 'work-fold-title';
+      titleEl.textContent = 'Working…';
       summary.appendChild(titleEl);
       const body = document.createElement('div');
-      body.className = 'tool-group-body';
+      body.className = 'work-fold-body';
       details.appendChild(summary);
       details.appendChild(body);
       log.appendChild(details);
-      toolGroupEl = details;
-      toolGroupBody = body;
-      toolGroupTitleEl = titleEl;
-      toolItemCount = 0;
+      workFoldEl = details;
+      workFoldBody = body;
+      workFoldTitleEl = titleEl;
+      workFoldActive = true;
+      workFoldToolCount = 0;
+      workFoldHasThought = false;
+      pendingToolItems.clear();
+      if (workFoldTimer) {
+        clearInterval(workFoldTimer);
+        workFoldTimer = null;
+      }
+      if (replaying) {
+        workFoldStartedAt = 0;
+        updateWorkFoldTitle(false);
+        workFoldTitleEl.textContent = 'Working…';
+      } else {
+        workFoldStartedAt = Date.now();
+        updateWorkFoldTitle(false);
+        workFoldTimer = setInterval(function () {
+          if (workFoldActive) updateWorkFoldTitle(false);
+        }, 1000);
+      }
+    }
+
+    function appendThoughtToWorkFold() {
+      ensureWorkFold();
+      assistantEl = null;
+      const wrap = document.createElement('div');
+      wrap.className = 'thought';
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = 'Thinking';
+      thoughtBody = document.createElement('div');
+      wrap.appendChild(label);
+      wrap.appendChild(thoughtBody);
+      workFoldBody.appendChild(wrap);
+      workFoldHasThought = true;
+      return thoughtBody;
     }
 
     function parseToolTitle(title) {
@@ -792,7 +865,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     function createToolItem(name, status, detailHeading, detailText, toolCallId) {
-      ensureToolGroup();
+      ensureWorkFold();
+      thoughtBody = null;
       const item = document.createElement('details');
       item.className = 'tool-item';
       if (toolCallId) item.dataset.toolCallId = toolCallId;
@@ -810,15 +884,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (detailText) {
         appendToolDetail(item, detailHeading || 'Detail', detailText);
       }
-      toolGroupBody.appendChild(item);
-      toolItemCount += 1;
-      updateToolGroupTitle();
+      workFoldBody.appendChild(item);
+      workFoldToolCount += 1;
+      if (!workFoldActive) {
+        // should not happen
+      } else if (!replaying) {
+        updateWorkFoldTitle(false);
+      }
       return item;
     }
 
     function renderTool(title, detail, toolCallId) {
       assistantEl = null;
-      thoughtBody = null;
       const parsed = parseToolTitle(title);
       const body = (detail || '').trim();
       const id = (toolCallId || '').trim();
@@ -846,7 +923,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           else pendingToolItems.delete(parsed.name);
         }
         if (item) {
-          // Drop the same node from the name queue if we matched by id.
           const nameQueue = pendingToolItems.get(parsed.name) || [];
           const idx = nameQueue.indexOf(item);
           if (idx >= 0) {
@@ -868,24 +944,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     function renderThought(text) {
-      closeToolGroup();
-      assistantEl = null;
-      const wrap = document.createElement('div');
-      wrap.className = 'msg thought';
-      const label = document.createElement('span');
-      label.className = 'label';
-      label.textContent = 'Thinking';
-      thoughtBody = document.createElement('div');
+      appendThoughtToWorkFold();
       thoughtBody.textContent = text || '';
-      wrap.appendChild(label);
-      wrap.appendChild(thoughtBody);
-      log.appendChild(wrap);
-      log.scrollTop = log.scrollHeight;
       thoughtBody = null;
+      log.scrollTop = log.scrollHeight;
     }
 
     function add(cls, text, asMarkdown) {
-      closeToolGroup();
+      sealWorkFold();
+      thoughtBody = null;
       const el = document.createElement('div');
       el.className = 'msg ' + cls;
       if (asMarkdown) setMarkdown(el, text || '');
@@ -907,7 +974,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       } else if (role === 'assistant') {
         if (!content) return;
         thoughtBody = null;
-        closeToolGroup();
         assistantEl = add('assistant', content, true);
         assistantEl = null;
       } else if (role === 'thought' || role === 'thinking') {
@@ -957,7 +1023,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           log.innerHTML = '';
           assistantEl = null;
           thoughtBody = null;
-          closeToolGroup();
+          sealWorkFold();
           showAttachment('');
           showSessionInfo('');
           break;
@@ -971,13 +1037,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           log.innerHTML = '';
           assistantEl = null;
           thoughtBody = null;
-          closeToolGroup();
+          sealWorkFold();
           showAttachment('');
+          replaying = true;
           const items = Array.isArray(msg.messages) ? msg.messages : [];
           for (const m of items) {
             renderHistoryItem(m);
           }
-          closeToolGroup();
+          sealWorkFold();
+          replaying = false;
           log.scrollTop = log.scrollHeight;
           break;
         }
@@ -992,45 +1060,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           add('assistant', msg.text || '', true);
           break;
         case 'thoughtStart': {
-          closeToolGroup();
-          assistantEl = null;
-          const wrap = document.createElement('div');
-          wrap.className = 'msg thought';
-          const label = document.createElement('span');
-          label.className = 'label';
-          label.textContent = 'Thinking';
-          thoughtBody = document.createElement('div');
-          wrap.appendChild(label);
-          wrap.appendChild(thoughtBody);
-          log.appendChild(wrap);
+          appendThoughtToWorkFold();
           log.scrollTop = log.scrollHeight;
           break;
         }
         case 'thoughtChunk':
           if (!thoughtBody) {
-            closeToolGroup();
-            assistantEl = null;
-            const wrap = document.createElement('div');
-            wrap.className = 'msg thought';
-            const label = document.createElement('span');
-            label.className = 'label';
-            label.textContent = 'Thinking';
-            thoughtBody = document.createElement('div');
-            wrap.appendChild(label);
-            wrap.appendChild(thoughtBody);
-            log.appendChild(wrap);
+            appendThoughtToWorkFold();
           }
           thoughtBody.textContent += msg.text || '';
           log.scrollTop = log.scrollHeight;
           break;
         case 'assistantStart':
-          closeToolGroup();
+          sealWorkFold();
           thoughtBody = null;
           assistantEl = add('assistant', '', true);
           break;
         case 'assistantChunk':
           if (!assistantEl) {
-            closeToolGroup();
+            sealWorkFold();
             assistantEl = add('assistant', '', true);
           }
           appendMarkdown(assistantEl, msg.text || '');
@@ -1045,6 +1093,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           renderTool(msg.title || '', msg.detail || '', msg.toolCallId || '');
           break;
         case 'permission': {
+          sealWorkFold();
           assistantEl = null;
           thoughtBody = null;
           const wrap = document.createElement('div');
@@ -1068,6 +1117,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         case 'busy':
           sendBtn.disabled = !!msg.busy;
+          if (!msg.busy) sealWorkFold();
           break;
       }
     });
