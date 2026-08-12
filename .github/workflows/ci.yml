@@ -39,9 +39,14 @@ jobs:
           PY
           )"
           echo "Pinned openjiuwen commit: ${COMMIT}"
+          # Sibling of the workspace so path = "../agent-core" resolves.
+          SDK_DIR="$(dirname "${GITHUB_WORKSPACE}")/agent-core"
+          rm -rf "${SDK_DIR}"
           git clone --filter=blob:none https://gitcode.com/michaelling/agent-core.git \
-            "${GITHUB_WORKSPACE}/agent-core"
-          git -C "${GITHUB_WORKSPACE}/agent-core" checkout --detach "${COMMIT}"
+            "${SDK_DIR}"
+          git -C "${SDK_DIR}" checkout --detach "${COMMIT}"
+          echo "SDK at ${SDK_DIR}"
+          test -f "${SDK_DIR}/pyproject.toml"
 
       - name: Point uv at local SDK for CI
         run: |
