@@ -254,15 +254,23 @@ class AcpServer:
             "title": session.title,
             "messageCount": len(session.messages),
             "model": session.model,
-            "messages": [
-                {
-                    "role": m.role,
-                    "content": m.content,
-                    "timestamp": m.timestamp,
-                }
-                for m in session.messages
-            ],
+            "messages": self._session_messages_for_client(store, sid, session),
         }
+
+    def _session_messages_for_client(
+        self,
+        store: SessionStore,
+        sid: str,
+        session: Any,
+    ) -> list[dict[str, str]]:
+        """Prefer event-log timeline (tools/thinking); fall back to stored messages."""
+        from openjiuwen_icode.features.session_timeline import session_timeline
+
+        return session_timeline(
+            store.store_dir,
+            sid,
+            fallback_messages=list(session.messages),
+        )
 
     async def _session_list(self, params: dict[str, Any]) -> dict[str, Any]:
         rows = self._store().list_sessions()
@@ -338,6 +346,7 @@ class AcpServer:
                     {
                         "sessionUpdate": "tool_call_update",
                         "toolCallId": ev.tool_call_id,
+                        "title": ev.tool_name,
                         "status": (
                             "completed"
                             if ev.tool_success is not False
@@ -348,7 +357,7 @@ class AcpServer:
                                 "type": "content",
                                 "content": {
                                     "type": "text",
-                                    "text": str(ev.result)[:8000],
+                                    "text": str(ev.result)[:2000],
                                 },
                             }
                         ],

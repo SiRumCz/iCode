@@ -155,16 +155,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return {
       type: "history",
       messages: this.transcript.map((line) => ({
-        role:
-          line.role === "tool" || line.role === "thought"
-            ? "system"
-            : line.role,
-        content:
-          line.role === "tool" && line.title
-            ? `${line.title}${line.content ? `\n${line.content}` : ""}`
-            : line.role === "thought"
-              ? `Thinking\n${line.content}`
-              : line.content,
+        role: line.role,
+        content: line.content,
+        title: line.title || "",
       })),
     };
   }
@@ -222,25 +215,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "assistant", text });
   }
 
-  /** Replace the transcript with persisted session messages. */
+  /** Replace the transcript by replaying the same live UI events. */
   loadHistory(
-    messages: Array<{ role?: string; content?: string }>
+    messages: Array<{ role?: string; content?: string; title?: string }>
   ): void {
     this.finalizeOpenBubbles();
-    this.transcript = messages
-      .map((m) => {
-        const role = String(m.role || "").toLowerCase();
-        const content = String(m.content || "");
+    this.transcript = [];
+    this.assistantOpen = false;
+    this.thoughtOpen = false;
+    this.post({ type: "clear" });
+    for (const m of messages) {
+      const role = String(m.role || "").toLowerCase();
+      const content = String(m.content || "");
+      const title = m.title != null ? String(m.title) : "";
+      if (role === "user") {
         if (!content) {
-          return undefined;
+          continue;
         }
-        if (role === "user" || role === "assistant" || role === "system") {
-          return { role, content } as TranscriptLine;
+        this.postUser(content);
+      } else if (role === "assistant") {
+        if (!content) {
+          continue;
         }
-        return { role: "system" as const, content };
-      })
-      .filter((m): m is TranscriptLine => Boolean(m));
-    this.post(this.historyPayload());
+        this.appendAssistant(content);
+        this.finalizeOpenBubbles();
+      } else if (role === "thought" || role === "thinking") {
+        if (!content) {
+          continue;
+        }
+        this.appendThought(content);
+        this.finalizeOpenBubbles();
+      } else if (role === "tool") {
+        this.postTool(title || "tool", content);
+      } else if (role === "system") {
+        if (!content) {
+          continue;
+        }
+        this.postSystem(content);
+      } else if (content) {
+        this.postSystem(content);
+      }
+    }
   }
 
   appendAssistant(text: string): void {
@@ -390,7 +405,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       border-left: 2px solid var(--vscode-inputValidation-errorBorder, #f14c4c);
       padding-left: 8px;
     }
-    .system, .tool { opacity: 0.85; font-size: 0.9em; }
+    .system { opacity: 0.85; font-size: 0.9em; }
+    .tool-fold {
+      opacity: 0.9; font-size: 0.9em;
+      background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,.12));
+      border-radius: 6px; padding: 0;
+    }
+    .tool-fold > summary {
+      cursor: pointer; list-style: none; padding: 8px 10px;
+      display: flex; align-items: flex-start; gap: 6px;
+      user-select: none;
+    }
+    .tool-fold > summary::-webkit-details-marker { display: none; }
+    .tool-fold > summary::before {
+      content: '▸'; flex-shrink: 0; opacity: 0.7; line-height: 1.45;
+    }
+    .tool-fold[open] > summary::before { content: '▾'; }
+    .tool-fold .tool-title {
+      flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .tool-fold .tool-detail {
+      margin: 0; padding: 0 10px 8px 22px; white-space: pre-wrap; word-break: break-word;
+      font-family: var(--vscode-editor-font-family, monospace); font-size: 0.88em;
+      opacity: 0.9; max-height: 280px; overflow: auto;
+      border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.35));
+      padding-top: 8px;
+    }
+    .tool-fold.tool-plain {
+      padding: 8px 10px; opacity: 0.85;
+    }
     .thought { opacity: 0.65; font-size: 0.85em; font-style: italic;
       border-left: 2px solid var(--vscode-descriptionForeground, #888); padding-left: 8px; }
     .thought .label { font-style: normal; opacity: 0.8; margin-bottom: 4px; display: block; }
@@ -658,6 +701,78 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return el;
     }
 
+    function renderThought(text) {
+      assistantEl = null;
+      const wrap = document.createElement('div');
+      wrap.className = 'msg thought';
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = 'Thinking';
+      thoughtBody = document.createElement('div');
+      thoughtBody.textContent = text || '';
+      wrap.appendChild(label);
+      wrap.appendChild(thoughtBody);
+      log.appendChild(wrap);
+      log.scrollTop = log.scrollHeight;
+      thoughtBody = null;
+    }
+
+    function renderTool(title, detail) {
+      assistantEl = null;
+      thoughtBody = null;
+      const head = (title || 'tool').trim();
+      const body = (detail || '').trim();
+      if (!body) {
+        const el = document.createElement('div');
+        el.className = 'msg tool-fold tool-plain';
+        el.textContent = head;
+        log.appendChild(el);
+        log.scrollTop = log.scrollHeight;
+        return;
+      }
+      const details = document.createElement('details');
+      details.className = 'msg tool-fold';
+      const summary = document.createElement('summary');
+      const titleEl = document.createElement('span');
+      titleEl.className = 'tool-title';
+      titleEl.textContent = head;
+      titleEl.title = head;
+      summary.appendChild(titleEl);
+      const pre = document.createElement('pre');
+      pre.className = 'tool-detail';
+      pre.textContent = body;
+      details.appendChild(summary);
+      details.appendChild(pre);
+      log.appendChild(details);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function renderHistoryItem(m) {
+      const role = (m.role || '').toLowerCase();
+      const content = m.content || '';
+      const title = m.title || '';
+      if (role === 'user') {
+        if (!content) return;
+        assistantEl = null;
+        thoughtBody = null;
+        add('user', content, false);
+      } else if (role === 'assistant') {
+        if (!content) return;
+        thoughtBody = null;
+        assistantEl = add('assistant', content, true);
+        assistantEl = null;
+      } else if (role === 'thought' || role === 'thinking') {
+        if (!content) return;
+        renderThought(content);
+      } else if (role === 'tool') {
+        renderTool(title || 'tool', content);
+      } else if (content) {
+        assistantEl = null;
+        thoughtBody = null;
+        add('system', content, false);
+      }
+    }
+
     sendBtn.addEventListener('click', () => {
       const text = input.value;
       if (!text.trim()) return;
@@ -709,14 +824,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           showAttachment('');
           const items = Array.isArray(msg.messages) ? msg.messages : [];
           for (const m of items) {
-            const role = (m.role || '').toLowerCase();
-            const content = m.content || '';
-            if (!content) continue;
-            if (role === 'user') add('user', content, false);
-            else if (role === 'assistant') add('assistant', content, true);
-            else if (role === 'system') add('system', content, false);
-            else add('system', content, false);
+            renderHistoryItem(m);
           }
+          log.scrollTop = log.scrollHeight;
           break;
         }
         case 'user':
@@ -745,6 +855,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         case 'thoughtChunk':
           if (!thoughtBody) {
+            assistantEl = null;
             const wrap = document.createElement('div');
             wrap.className = 'msg thought';
             const label = document.createElement('span');
@@ -773,9 +884,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           add('system', msg.text || '', false);
           break;
         case 'tool':
-          assistantEl = null;
-          thoughtBody = null;
-          add('tool', (msg.title || '') + (msg.detail ? '\\n' + msg.detail : ''), false);
+          renderTool(msg.title || '', msg.detail || '');
           break;
         case 'permission': {
           assistantEl = null;

@@ -344,7 +344,7 @@ async function loadSession(sessionId?: string): Promise<void> {
     sessionId?: string;
     title?: string;
     model?: string;
-    messages?: Array<{ role?: string; content?: string }>;
+    messages?: Array<{ role?: string; content?: string; title?: string }>;
   };
   currentSessionId = result.sessionId || sessionId;
   const messages = result.messages ?? [];
@@ -591,7 +591,10 @@ function handleSessionUpdate(params: {
       );
       break;
     case "tool_call_update":
-      chat.postTool(`■ tool ${update.status ?? "done"}`, "");
+      chat.postTool(
+        `■ ${update.title ?? "tool"} ${update.status ?? "done"}`,
+        clipText(extractUpdateText(update.content), 2000)
+      );
       break;
     case "usage_update":
       chat.postSystem(
@@ -631,4 +634,33 @@ function extractText(content: unknown): string {
     return String((content as { text: unknown }).text ?? "");
   }
   return "";
+}
+
+/** ACP tool_call_update may nest text under content[].content.text. */
+function extractUpdateText(content: unknown): string {
+  if (!content) {
+    return "";
+  }
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (item && typeof item === "object" && "content" in item) {
+          return extractText((item as { content: unknown }).content);
+        }
+        return extractText(item);
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return extractText(content);
+}
+
+function clipText(text: string, limit: number): string {
+  if (text.length <= limit) {
+    return text;
+  }
+  return `${text.slice(0, limit)}…`;
 }
