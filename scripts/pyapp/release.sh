@@ -2,9 +2,9 @@
 # Prepare an iCode release:
 #   1. Optionally bump / set the project version (CLI + VS Code extension);
 #      commit if it changed
-#   2. Tag HEAD as vX.Y.Z and push the commit + tag to origin
+#   2. Tag HEAD as vX.Y.Z and push commits/tags to origin (GitCode) + github
 #   3. Build macOS + Linux PyApp binaries + vscode-icode .vsix into dist/release
-#   4. Optionally publish artifacts to a GitCode release
+#   4. Optionally publish artifacts to GitCode + GitHub releases (concurrent)
 #
 # Usage:
 #   ./scripts/pyapp/release.sh                  # bump patch, commit, tag, push, build
@@ -26,15 +26,17 @@
 #   --out-dir DIR        Release output dir (default: dist/release)
 #   --dry-run            Print planned version/actions; do not write or build
 #   --no-tag             Do not create a git tag
-#   --no-push            Do not push commit/tag to origin
+#   --no-push            Do not push commit/tag to remotes
 #   --force-tag          Move an existing tag onto HEAD if it points elsewhere
-#   --publish            Upload artifacts to a GitCode release (non-interactive yes)
-#   --no-publish         Skip GitCode release upload (non-interactive no)
+#   --publish            Upload artifacts to GitCode + GitHub releases (yes)
+#   --no-publish         Skip release uploads (non-interactive no)
 #
 #   ./scripts/pyapp/release.sh --no-bump --full
 #
-# After a successful build, asks whether to publish artifacts to GitCode unless
-# --publish / --no-publish is set. Requires GITCODE_TOKEN for uploads.
+# Remotes: development / primary = origin (GitCode). Mirror publish = github.
+# After a successful build, asks whether to publish artifacts unless
+# --publish / --no-publish is set. GitCode needs GITCODE_TOKEN; GitHub needs
+# `gh` auth (or GH_TOKEN). Uploads run concurrently in the background.
 #
 # macOS binaries require a Darwin host; Linux targets use Docker when available.
 # Windows is intentionally omitted (needs a Windows runner).
@@ -57,6 +59,9 @@ DO_TAG=true
 DO_PUSH=true
 FORCE_TAG=false
 PUBLISH_MODE="ask"   # ask | yes | no
+# Primary = GitCode (origin). Mirror = GitHub sync/publish remote.
+PRIMARY_REMOTE="${PRIMARY_REMOTE:-origin}"
+MIRROR_REMOTE="${MIRROR_REMOTE:-github}"
 OUT_DIR=""
 
 usage() {
@@ -70,10 +75,10 @@ Version:
 
 Git:
   --no-tag                   Skip creating vX.Y.Z on HEAD
-  --no-push                  Skip pushing commit/tag to origin
+  --no-push                  Skip pushing commit/tags to remotes
   --force-tag                Recreate tag on HEAD if it already exists elsewhere
-  --publish                  Upload build artifacts to a GitCode release
-  --no-publish               Do not upload to GitCode (skip the prompt)
+  --publish                  Upload build artifacts to GitCode + GitHub releases
+  --no-publish               Do not upload releases (skip the prompt)
 
 Build:
   --uv                       Use uv installer in slim PyApp binaries
@@ -82,6 +87,10 @@ Build:
   --skip-build               Only handle version / commit / tag / push
   --out-dir DIR              Collect artifacts here (default: dist/release)
   --dry-run                  Show plan only
+
+Remotes (defaults):
+  origin                     GitCode primary (development)
+  github                     GitHub mirror (sync + release publish)
 
 Examples:
   ./scripts/pyapp/release.sh
@@ -356,10 +365,11 @@ build_extension_vsix() {
 }
 
 tag_and_push_release() {
-    # Tag HEAD as vX.Y.Z (bump commit or current commit) and push to origin.
+    # Tag HEAD as vX.Y.Z, then push commits + tags to GitCode (origin) and
+    # the GitHub mirror remote.
     local version="$1"
     local tag="v${version}"
-    local head_sha remote_name existing
+    local head_sha existing remote
 
     (
         cd "$PROJECT_ROOT"
@@ -368,8 +378,6 @@ tag_and_push_release() {
             || pyapp_die "not a git repository"
 
         head_sha="$(git rev-parse HEAD)"
-        remote_name="$(git remote 2>/dev/null | head -1 || true)"
-        [[ -n "$remote_name" ]] || remote_name="origin"
 
         if [[ "$DO_TAG" == "true" ]]; then
             if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
@@ -396,29 +404,45 @@ tag_and_push_release() {
             return 0
         fi
 
-        pyapp_log "Pushing HEAD to ${remote_name}..."
-        git push -u "$remote_name" HEAD
-
-        if [[ "$DO_TAG" == "true" ]]; then
-            pyapp_log "Pushing tag ${tag} to ${remote_name}..."
-            if [[ "$FORCE_TAG" == "true" ]]; then
-                git push -f "$remote_name" "refs/tags/${tag}"
-            else
-                git push "$remote_name" "refs/tags/${tag}"
+        push_remote() {
+            local remote="$1"
+            local role="$2"
+            if ! git remote get-url "$remote" >/dev/null 2>&1; then
+                if [[ "$remote" == "$PRIMARY_REMOTE" ]]; then
+                    pyapp_die "primary remote '${remote}' is missing"
+                fi
+                pyapp_log "Mirror remote '${remote}' missing; skip ${role} push"
+                return 0
             fi
-        fi
+            pyapp_log "Pushing HEAD to ${remote} (${role})..."
+            git push -u "$remote" HEAD
+            # Sync all local tags (release + historical) to the mirror/primary.
+            pyapp_log "Pushing tags to ${remote} (${role})..."
+            if [[ "$FORCE_TAG" == "true" && "$DO_TAG" == "true" ]]; then
+                git push -f "$remote" "refs/tags/${tag}"
+                git push "$remote" --tags
+            else
+                git push "$remote" --tags
+            fi
+        }
+
+        push_remote "$PRIMARY_REMOTE" "GitCode primary"
+        push_remote "$MIRROR_REMOTE" "GitHub mirror"
     )
 }
 
-maybe_publish_gitcode_release() {
+maybe_publish_releases() {
+    # Ask once, then upload to GitCode + GitHub concurrently in the background.
     local version="$1"
     local artifact_dir="$2"
     local answer=""
     local tag="v${version}"
+    local work_dir log_gc log_gh pid_gc pid_gh rc_gc rc_gh
+    local have_gitcode=false have_github=false
 
     case "$PUBLISH_MODE" in
         no)
-            pyapp_log "Skipping GitCode release upload (--no-publish)"
+            pyapp_log "Skipping release uploads (--no-publish)"
             return 0
             ;;
         yes)
@@ -426,14 +450,14 @@ maybe_publish_gitcode_release() {
             ;;
         ask)
             if [[ ! -t 0 ]]; then
-                pyapp_log "Non-interactive stdin; skip GitCode publish (pass --publish to force)"
+                pyapp_log "Non-interactive stdin; skip release publish (pass --publish to force)"
                 return 0
             fi
             echo
             echo "Build artifacts are ready in: $artifact_dir"
             ls -la "$artifact_dir" || true
             echo
-            read -r -p "Publish these files to GitCode as release ${tag}? [y/N] " answer
+            read -r -p "Publish these files as release ${tag} on GitCode + GitHub? [y/N] " answer
             ;;
         *)
             pyapp_die "internal error: unknown PUBLISH_MODE=$PUBLISH_MODE"
@@ -443,21 +467,91 @@ maybe_publish_gitcode_release() {
     case "${answer}" in
         y|Y|yes|YES|Yes) ;;
         *)
-            pyapp_log "Not publishing to GitCode"
+            pyapp_log "Not publishing releases"
             return 0
             ;;
     esac
 
-    if [[ -z "${GITCODE_TOKEN:-}" ]]; then
-        echo "GITCODE_TOKEN is not set." >&2
-        echo "Create a personal access token on GitCode, then:" >&2
-        echo "  export GITCODE_TOKEN=..." >&2
-        echo "Re-run publish with:" >&2
+    if [[ -n "${GITCODE_TOKEN:-}" ]]; then
+        have_gitcode=true
+    else
+        echo "GITCODE_TOKEN is not set — skipping GitCode release upload." >&2
+        echo "  export GITCODE_TOKEN=... then:" >&2
         echo "  ./scripts/pyapp/publish-gitcode-release.sh ${version} ${artifact_dir}" >&2
+    fi
+
+    if command -v gh >/dev/null 2>&1 \
+        && git -C "$PROJECT_ROOT" remote get-url "$MIRROR_REMOTE" >/dev/null 2>&1; then
+        have_github=true
+    else
+        echo "GitHub publish skipped (need \`gh\` + remote '${MIRROR_REMOTE}')." >&2
+        echo "  gh auth login   # or export GH_TOKEN=..." >&2
+        echo "  ./scripts/pyapp/publish-github-release.sh ${version} ${artifact_dir}" >&2
+    fi
+
+    if [[ "$have_gitcode" != "true" && "$have_github" != "true" ]]; then
         return 1
     fi
 
-    "$SCRIPT_DIR/publish-gitcode-release.sh" "$version" "$artifact_dir"
+    work_dir="$(mktemp -d "${TMPDIR:-/tmp}/icode-publish.XXXXXX")"
+    log_gc="$work_dir/gitcode.log"
+    log_gh="$work_dir/github.log"
+    pid_gc=""
+    pid_gh=""
+    rc_gc=0
+    rc_gh=0
+
+    pyapp_log "Starting concurrent release uploads..."
+    if [[ "$have_gitcode" == "true" ]]; then
+        (
+            "$SCRIPT_DIR/publish-gitcode-release.sh" "$version" "$artifact_dir"
+        ) >"$log_gc" 2>&1 &
+        pid_gc=$!
+        pyapp_log "GitCode upload pid=${pid_gc} (log: $log_gc)"
+    fi
+    if [[ "$have_github" == "true" ]]; then
+        (
+            "$SCRIPT_DIR/publish-github-release.sh" "$version" "$artifact_dir"
+        ) >"$log_gh" 2>&1 &
+        pid_gh=$!
+        pyapp_log "GitHub upload pid=${pid_gh} (log: $log_gh)"
+    fi
+
+    if [[ -n "$pid_gc" ]]; then
+        if wait "$pid_gc"; then
+            rc_gc=0
+            pyapp_log "GitCode publish OK"
+        else
+            rc_gc=$?
+            echo "GitCode publish FAILED (exit ${rc_gc}). Log:" >&2
+            cat "$log_gc" >&2 || true
+        fi
+    fi
+    if [[ -n "$pid_gh" ]]; then
+        if wait "$pid_gh"; then
+            rc_gh=0
+            pyapp_log "GitHub publish OK"
+        else
+            rc_gh=$?
+            echo "GitHub publish FAILED (exit ${rc_gh}). Log:" >&2
+            cat "$log_gh" >&2 || true
+        fi
+    fi
+
+    # Keep successful logs brief; dump tails for visibility.
+    if [[ -n "$pid_gc" && "$rc_gc" -eq 0 ]]; then
+        tail -n 5 "$log_gc" || true
+    fi
+    if [[ -n "$pid_gh" && "$rc_gh" -eq 0 ]]; then
+        tail -n 5 "$log_gh" || true
+    fi
+
+    rm -rf "$work_dir"
+
+    if [[ "$rc_gc" -ne 0 || "$rc_gh" -ne 0 ]]; then
+        return 1
+    fi
+    return 0
 }
 
 collect_release_dir() {
@@ -574,8 +668,8 @@ fi
 pyapp_log "Current version: pyproject=${CLI_PKG_VERSION} extension=${EXT_VERSION:-n/a} (bump-base=${OLD_VERSION})"
 pyapp_log "Release version: $NEW_VERSION"
 pyapp_log "Output dir:      $OUT_DIR"
-pyapp_log "Git tag/push:    tag=$([[ "$DO_TAG" == "true" ]] && echo v${NEW_VERSION} || echo skip) push=$([[ "$DO_PUSH" == "true" ]] && echo yes || echo no)"
-pyapp_log "GitCode publish: $PUBLISH_MODE"
+pyapp_log "Git tag/push:    tag=$([[ "$DO_TAG" == "true" ]] && echo v${NEW_VERSION} || echo skip) push=$([[ "$DO_PUSH" == "true" ]] && echo "${PRIMARY_REMOTE}+${MIRROR_REMOTE}" || echo no)"
+pyapp_log "Release publish: $PUBLISH_MODE (GitCode + GitHub concurrent)"
 if [[ "$DRY_RUN" == "true" ]]; then
     pyapp_log "Dry run only — no writes, commit, tag, push, build, or publish"
     exit 0
@@ -724,12 +818,12 @@ elif [[ "$DO_TAG" == "true" ]]; then
 fi
 echo "    Artifacts: $OUT_DIR"
 
-# Interactive (or --publish / --no-publish) GitCode release upload.
+# Interactive (or --publish / --no-publish) GitCode + GitHub release uploads.
 set +e
-maybe_publish_gitcode_release "$NEW_VERSION" "$OUT_DIR"
+maybe_publish_releases "$NEW_VERSION" "$OUT_DIR"
 publish_rc=$?
 set -e
 if [[ "$publish_rc" -ne 0 ]]; then
-    echo "Warning: GitCode publish failed (exit ${publish_rc}); local artifacts remain in $OUT_DIR" >&2
+    echo "Warning: one or more release publishes failed (exit ${publish_rc}); local artifacts remain in $OUT_DIR" >&2
     exit "$publish_rc"
 fi

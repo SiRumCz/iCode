@@ -45,16 +45,21 @@ Optional:
 ./scripts/pyapp/release.sh --no-bump --skip-build --no-push   # local tag only
 ```
 
-After binaries are collected, `release.sh` asks whether to upload them to a
-**GitCode release** for `vX.Y.Z` (or use `--publish` / `--no-publish`). Upload
-needs a personal access token:
+After binaries are collected, `release.sh` asks whether to upload them as a
+**GitCode + GitHub** release for `vX.Y.Z` (or use `--publish` / `--no-publish`).
+The two uploads run **concurrently** in the background.
 
 ```bash
 export GITCODE_TOKEN=...   # GitCode PAT with release permissions
+# GitHub: gh auth login   # or export GH_TOKEN=...
 ./scripts/pyapp/release.sh --no-bump --full --publish
 # or republish existing artifacts:
-./scripts/pyapp/publish-gitcode-release.sh 0.1.3 dist/release
+./scripts/pyapp/publish-gitcode-release.sh 0.1.21 dist/release
+./scripts/pyapp/publish-github-release.sh 0.1.21 dist/release
 ```
+
+Remotes: `origin` = GitCode (primary / development), `github` = mirror for sync
+and GitHub Releases. `release.sh` pushes HEAD and all tags to both.
 
 | Artifact name | Meaning |
 |---------------|---------|
