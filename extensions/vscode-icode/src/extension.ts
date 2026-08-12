@@ -72,7 +72,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       vscode.commands.executeCommand("icode.chatView.focus")
     ),
     vscode.commands.registerCommand("icode.openChatInEditor", () =>
-      chat.openInEditor(vscode.ViewColumn.Beside)
+      chat.openInEditor(vscode.ViewColumn.Active)
     ),
     vscode.commands.registerCommand("icode.newSession", () => void newSession()),
     vscode.commands.registerCommand("icode.restartAgent", () => void restartAgent()),
@@ -162,7 +162,7 @@ function setEditorAttachment(
 }
 
 async function focusChat(): Promise<void> {
-  chat.openInEditor(vscode.ViewColumn.Beside);
+  chat.openInEditor(vscode.ViewColumn.Active);
 }
 
 async function addSelectionToChat(): Promise<void> {

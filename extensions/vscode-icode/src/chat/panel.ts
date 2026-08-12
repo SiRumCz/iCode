@@ -67,8 +67,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** Open (or reveal) chat as a normal editor tab — works beside Explorer. */
-  openInEditor(column: vscode.ViewColumn = vscode.ViewColumn.Beside): void {
+  /** Open (or reveal) chat as a tab in the active editor group. */
+  openInEditor(column: vscode.ViewColumn = vscode.ViewColumn.Active): void {
     if (this.editorPanel) {
       this.editorPanel.reveal(column, false);
       return;
