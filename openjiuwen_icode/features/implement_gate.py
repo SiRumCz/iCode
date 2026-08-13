@@ -159,7 +159,17 @@ def looks_like_verify_command(command: str) -> bool:
     if not command or not str(command).strip():
         return False
     lower = str(command).lower()
-    return any(hint in lower for hint in _VERIFY_HINTS)
+    if any(hint in lower for hint in _VERIFY_HINTS):
+        return True
+    # CPython / autotools: interpreter rebuild smoke checks.
+    if "make" in lower and "python" in lower:
+        return True
+    # Inline smoke tests (common on LoLBench CPython tasks).
+    if re.search(r"(?:\./)?python(?:3(?:\.\d+)?)?\s+-c\b", lower):
+        return True
+    if re.search(r"(?:\./)?python(?:3(?:\.\d+)?)?\s+-m\b", lower):
+        return True
+    return False
 
 
 def looks_like_submit_command(command: str) -> bool:
@@ -237,6 +247,11 @@ def next_implement_continuation(
         return ZERO_MUTATION_NUDGE
     if shallow_only:
         return SHALLOW_EDIT_NUDGE
+    # When the user named an explicit submit step, a successful submit is the
+    # deliverable — do not fail closed because verify heuristics missed a
+    # repo-specific build command (e.g. `make python`, `./python -c`).
+    if task_requires_submit(user_text) and submit_attempted:
+        return None
     if not verify_attempted:
         return VERIFY_NUDGE
     if task_requires_submit(user_text) and not submit_attempted:

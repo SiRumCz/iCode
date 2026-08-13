@@ -38,6 +38,9 @@ def test_verify_and_submit_command_detection() -> None:
     assert looks_like_verify_command("cargo check -p ruff")
     assert looks_like_verify_command("cd /workspace/ruff && cargo test --test x")
     assert looks_like_verify_command("pytest -q")
+    assert looks_like_verify_command("CCACHE_DISABLE=1 make -j2 python")
+    assert looks_like_verify_command("./python -c \"import ast; assert True\"")
+    assert looks_like_verify_command("python -m pytest -q")
     assert not looks_like_verify_command("ls crates")
     assert looks_like_submit_command("lolbench-submit")
     assert looks_like_submit_command("cat /logs/artifacts/solution.patch")
@@ -146,6 +149,20 @@ def test_next_implement_continuation_chain() -> None:
             user_text=text,
             mutate_attempted=True,
             verify_attempted=True,
+            submit_attempted=True,
+            shallow_only=False,
+        )
+        is None
+    )
+
+
+def test_submit_completes_lolbench_task_without_recognized_verify() -> None:
+    text = "Implement --config overrides then run lolbench-submit"
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=False,
             submit_attempted=True,
             shallow_only=False,
         )
