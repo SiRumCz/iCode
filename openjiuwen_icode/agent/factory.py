@@ -480,9 +480,13 @@ def create_agent(
         from openjiuwen_icode.rails.code_edit_nudge import (
             CodeEditNudgeRail,
         )
+        from openjiuwen_icode.rails.implement_completeness import (
+            ImplementCompletenessRail,
+        )
 
         rails.append(CodeTaskPlanningRail())
         rails.append(CodeEditNudgeRail())
+        rails.append(ImplementCompletenessRail())
 
     # --- Interrupt rails ---
     # AskUserRail: intercepts ask_user tool calls and

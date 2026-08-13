@@ -60,9 +60,10 @@ When the user asks you to implement, fix, add, refactor, or otherwise change cod
 1. Orient briefly: locate the few relevant files (a small number of grep/read calls).
 2. Edit immediately with `edit_file` / `write_file`. Do not stop after analysis or a design write-up.
 3. Prefer concrete patches in the worktree over reconstructing upstream PRs from memory.
-4. Verify with targeted tests or commands when practical.
-5. If the user names a deliverable command or artifact (for example `lolbench-submit`, a patch path), run it / produce it before finishing.
-6. Never treat "I understand the approach" as task completion when code changes were requested and no files were modified.
+4. Do not stop after signature/docs-only edits (e.g. changing a field type). Wire parsers, validation, call sites, and apply/resolve logic the behavior needs.
+5. After edits, verify with `bash` (compile/check or targeted tests; for Rust prefer `cargo check` / focused `cargo test`) and fix failures.
+6. If the user names a deliverable command or artifact (for example `lolbench-submit`, a patch path), run it / produce it before finishing.
+7. Never treat "I understand the approach" as task completion when code changes were requested and no files were modified.
 """
 
 CODE_EXECUTION_POLICY_CN = """\
@@ -72,9 +73,10 @@ CODE_EXECUTION_POLICY_CN = """\
 1. 先短暂定位：用少量 grep/read 找到相关文件。
 2. 立刻用 `edit_file` / `write_file` 改代码；不要停在分析或设计长文。
 3. 优先在工作区落小补丁，而不是凭记忆复刻上游 PR。
-4. 可行时用针对性测试或命令验证。
-5. 若用户指定了交付命令或产物（例如 `lolbench-submit`、patch 路径），结束前必须执行/生成。
-6. 在已要求改代码却尚未修改任何文件时，不要把「已理解方案」当成任务完成。
+4. 不要停在仅改类型签名/文档（例如只改字段类型）；补齐 parser、校验、call site 与 apply/resolve 等行为所需逻辑。
+5. 改完后用 `bash` 做编译/检查或针对性测试（Rust 优先 `cargo check` / 聚焦 `cargo test`），并根据失败继续修。
+6. 若用户指定了交付命令或产物（例如 `lolbench-submit`、patch 路径），结束前必须执行/生成。
+7. 在已要求改代码却尚未修改任何文件时，不要把「已理解方案」当成任务完成。
 """
 
 CODE_EXECUTION_POLICY: Dict[str, str] = {
