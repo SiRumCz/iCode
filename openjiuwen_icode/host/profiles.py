@@ -319,7 +319,7 @@ def switch_agent_profile_in_settings(
 def list_agent_profiles() -> list[dict[str, Any]]:
     """Return builtin agent role labels + optional user YAML/JSON stubs."""
     profiles: list[dict[str, Any]] = [
-        {"id": "code", "label": "Code (default DeepAgent)"},
+        {"id": "code", "label": "Code (coding agent)"},
         {"id": "general-purpose", "label": "General subagent"},
         {"id": "explore_agent", "label": "Explore subagent (read-only)"},
         {"id": "plan_agent", "label": "Plan subagent (read-only)"},

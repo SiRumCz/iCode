@@ -451,10 +451,20 @@ def create_agent(
         max_tokens=cfg.max_tokens,
     )
 
+    from openjiuwen_icode.agent.profile_loader import (
+        active_agent_profile_id,
+    )
+    from openjiuwen_icode.prompts.code_profile import is_code_profile
+    from openjiuwen_icode.rails.code_task_planning import (
+        CodeTaskPlanningRail,
+    )
+
+    agent_profile = active_agent_profile_id() or "code"
     system_prompt = build_system_prompt(
         cwd=cfg.cwd,
         model=cfg.model,
         provider=cfg.provider,
+        agent_profile=agent_profile,
     )
 
     tracker = TokenTrackingRail()
@@ -463,6 +473,11 @@ def create_agent(
 
     # Build rails list
     rails: list[Any] = [tracker, tool_tracker, fs_rail]
+
+    # Code profile: coding-oriented todo guidance (suppresses the default
+    # TaskPlanningRail inject via isinstance check in create_deep_agent).
+    if is_code_profile(agent_profile):
+        rails.append(CodeTaskPlanningRail())
 
     # --- Interrupt rails ---
     # AskUserRail: intercepts ask_user tool calls and

@@ -6,6 +6,9 @@ memory.
 
 The harness builder provides built-in sections for identity, tools,
 safety, etc. — we only add CLI-specific dynamic sections on top.
+
+For the ``code`` agent profile, also inject coding-agent identity and
+an edit-first execution policy (see ``prompts.code_profile``).
 """
 
 from __future__ import annotations
@@ -23,6 +26,12 @@ from openjiuwen.harness.prompts import (
     PromptMode,
     SystemPromptBuilder,
     resolve_language,
+)
+
+from openjiuwen_icode.prompts.code_profile import (
+    build_code_execution_policy_section,
+    build_code_identity_section,
+    is_code_profile,
 )
 
 # ---------------------------------------------------------------------------
@@ -145,6 +154,7 @@ def build_system_prompt(
     model: str,
     provider: str,
     language: str = "en",
+    agent_profile: str | None = None,
 ) -> str:
     """Assemble the full system prompt using the harness builder.
 
@@ -152,6 +162,8 @@ def build_system_prompt(
     (identity, tools, safety, runtime) based on the prompt mode.
     We add CLI-specific sections on top:
 
+    - **code_identity** / **code_execution_policy** (profile ``code``):
+      coding-agent identity and edit-first delivery rules
     - **environment** (priority 20): CWD, platform, model, git branch
     - **project_memory** (priority 120): OPENJIUWEN.md content
 
@@ -160,6 +172,7 @@ def build_system_prompt(
         model: Model name for self-awareness.
         provider: Provider name.
         language: Prompt language (``"en"`` or ``"cn"``).
+        agent_profile: Active agent profile id (default ``code``).
 
     Returns:
         Complete system prompt string.
@@ -169,6 +182,21 @@ def build_system_prompt(
         language=lang,
         mode=PromptMode.FULL,
     )
+
+    profile = agent_profile
+    if profile is None:
+        try:
+            from openjiuwen_icode.agent.profile_loader import (
+                active_agent_profile_id,
+            )
+
+            profile = active_agent_profile_id() or "code"
+        except Exception:  # noqa: BLE001
+            profile = "code"
+
+    if is_code_profile(profile):
+        builder.add_section(build_code_identity_section(lang))
+        builder.add_section(build_code_execution_policy_section(lang))
 
     # Inject environment info
     env_text = _build_environment_section(cwd, model, provider)
