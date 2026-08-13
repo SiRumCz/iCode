@@ -67,6 +67,10 @@ include = ["openjiuwen_icode*"]
 openjiuwen_icode = [
     "**/prompts/**/*.md",
     "**/locales/**/*.md",
+    "vendor/rg/VERSION",
+    "vendor/rg/README.md",
+    "vendor/rg/*/rg",
+    "vendor/rg/*/rg.exe",
 ]
 
 [tool.pytest.ini_options]

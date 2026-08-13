@@ -15,6 +15,9 @@
 1. 能力矩阵对齐：列出 Chrys 每个 builtin 与 harness tool 的 1:1 表，缺什么补什么。
 2. **Doc converter：** 新工具（可选依赖），输入 path → 提取文本；注意沙箱与体积限制。
 3. Kind 元数据：若审批/hooks 需要 kind，在 ToolCard 或旁路 attr 上挂稳定 kind 字符串，对齐 Chrys 集合。
-4. Search：继续用现有 grep/rg 路径；可考虑 vendored rg 脚本（Chrys `scripts/fetch_rg.sh`）提升 Windows 体验。
+4. Search：iCode vendors official ripgrep under `openjiuwen_icode/vendor/rg/`
+   (`scripts/fetch_rg.py`); agent-core ``GrepTool`` prefers
+   ``OPENJIUWEN_RG`` / vendored binary / ``PATH``, then fixed GNU grep
+   fallback (`-e` / `--`).
 
 **落点：** `harness/tools/`；doc_converter 为显式新特性。

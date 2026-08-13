@@ -42,6 +42,16 @@ from openjiuwen.harness.rails import (
 
 logger = logging.getLogger(__name__)
 
+# Prefer iCode-vendored ripgrep before agent-core GrepTool resolves PATH.
+try:
+    from openjiuwen_icode.vendor.rg_binary import ensure_rg_env
+
+    _rg = ensure_rg_env()
+    if _rg:
+        logger.debug("using ripgrep at %s", _rg)
+except Exception as exc:  # noqa: BLE001
+    logger.debug("vendored ripgrep not configured: %s", exc)
+
 
 # ---------------------------------------------------------------------------
 # Default skill directories (priority high → low)

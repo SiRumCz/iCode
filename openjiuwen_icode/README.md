@@ -318,7 +318,7 @@ CLI Agent 集成了丰富的工具、Rail 插件和子 Agent，开箱即用。
 | `write_file` | 写入文件 | 完全覆盖写入，文件不存在时自动创建 |
 | `edit_file` | 智能编辑 | 基于字符串替换的精确编辑，保留格式 |
 | `glob` | 文件匹配 | 支持 `**/*` 等 glob 模式查找文件 |
-| `grep` | 内容搜索 | 支持正则表达式搜索文件内容 |
+| `grep` | 内容搜索 | 优先使用 iCode 内置 ripgrep；支持正则 / type / glob |
 | `list_files` | 目录列表 | 列出指定目录下的文件和子目录 |
 | `code` | 代码执行 | 执行 Python 或 JavaScript 代码片段 |
 
