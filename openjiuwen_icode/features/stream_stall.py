@@ -23,13 +23,16 @@ async def iter_with_stall_retry(
     *,
     stall_seconds: float = DEFAULT_STALL_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
+    retry_midstream: bool = True,
     on_retry: Callable[[int, float], Awaitable[None] | None] | None = None,
 ) -> AsyncIterator[Any]:
     """Yield chunks from *open_stream*, restarting on idle stall.
 
-    Retries only when **zero** chunks were received for the attempt (true hang
-    before first token). Mid-stream stalls raise after retries are exhausted
-    so partial UI state is not silently replayed.
+    Retries when the stream hangs before the first chunk, and (when
+    ``retry_midstream`` is True) also when it hangs after some chunks have
+    already arrived — common with long reasoning / tool-loop model calls.
+    Callers should supply a continuation query on reopen via *open_stream*
+    closure state so work is not blindly replayed from scratch.
     """
     attempt = 0
     while True:
@@ -46,13 +49,17 @@ async def iter_with_stall_retry(
                 except StopAsyncIteration:
                     return
                 except asyncio.TimeoutError as exc:
-                    if received == 0 and attempt <= max_retries:
+                    can_retry = attempt <= max_retries and (
+                        received == 0 or retry_midstream
+                    )
+                    if can_retry:
                         logger.warning(
-                            "Stream stall before first chunk "
-                            "(attempt %s/%s, idle=%.0fs); retrying",
+                            "Stream stall "
+                            "(attempt %s/%s, idle=%.0fs, received=%s); retrying",
                             attempt,
                             max_retries,
                             stall_seconds,
+                            received,
                         )
                         if on_retry is not None:
                             maybe = on_retry(attempt, stall_seconds)

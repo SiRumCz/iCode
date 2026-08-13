@@ -272,66 +272,104 @@ class SessionHost:
         sid = event.session_id or self._session_id
         query: Any = event.text
         assistant_parts: list[str] = []
+        mutate_attempted = False
+        continuation_attempts = 0
+        max_continuations = 2 if self._auto_approve else 0
         if self._mutations is not None and sid:
             self._mutations.begin_turn(sid)
         try:
+            from openjiuwen_icode.features.implement_gate import (
+                ZERO_MUTATION_NUDGE,
+                looks_like_implement_task,
+            )
+            from openjiuwen_icode.features.mutations import MUTATING_TOOLS
+            from openjiuwen_icode.features.stream_stall import (
+                StreamStallError,
+            )
+
             await self._bus.publish(
                 TurnStarted(text=event.text, session_id=sid)
             )
             while True:
                 pending: list[ApprovalRequest | QuestionToUser] = []
                 saw_stream_text = False
-                stream = self._backend.run_streaming(
-                    query,
-                    session_id=sid,
-                )
-                async for chunk in stream:
-                    for ev in chunk_to_events(chunk, session_id=sid):
-                        if isinstance(ev, AgentMessage) and ev.text:
-                            if ev.stream:
-                                saw_stream_text = True
-                                assistant_parts.append(ev.text)
-                            elif saw_stream_text:
-                                # Skip answer/message duplicates of llm_output.
-                                continue
+                try:
+                    stream = self._backend.run_streaming(
+                        query,
+                        session_id=sid,
+                    )
+                    async for chunk in stream:
+                        for ev in chunk_to_events(chunk, session_id=sid):
+                            if isinstance(ev, AgentMessage) and ev.text:
+                                if ev.stream:
+                                    saw_stream_text = True
+                                    assistant_parts.append(ev.text)
+                                elif saw_stream_text:
+                                    # Skip answer/message duplicates of llm_output.
+                                    continue
+                                else:
+                                    assistant_parts.append(ev.text)
+                            if isinstance(ev, ToolCallStart):
+                                if ev.tool_name in MUTATING_TOOLS:
+                                    mutate_attempted = True
+                                if self._mutations:
+                                    self._mutations.record_tool_mutation(
+                                        ev.tool_name, ev.tool_args
+                                    )
+                            if isinstance(ev, ToolCallResult) and self._mutations:
+                                self._mutations.refresh_after_hashes()
+                            if isinstance(ev, (ApprovalRequest, QuestionToUser)):
+                                loop = asyncio.get_running_loop()
+                                fut: asyncio.Future[Any] = loop.create_future()
+                                self._pending_answers[ev.interaction_id] = fut
+                                pending.append(ev)
+                                await self._bus.publish(ev)
+                                if self._auto_approve:
+                                    await self._auto_resolve(ev, sid)
                             else:
-                                assistant_parts.append(ev.text)
-                        if isinstance(ev, ToolCallStart) and self._mutations:
-                            self._mutations.record_tool_mutation(
-                                ev.tool_name, ev.tool_args
+                                if (
+                                    isinstance(ev, AgentMessage)
+                                    and not ev.stream
+                                    and saw_stream_text
+                                ):
+                                    continue
+                                await self._bus.publish(ev)
+                except StreamStallError:
+                    if (
+                        continuation_attempts < max_continuations
+                        and looks_like_implement_task(event.text)
+                        and not mutate_attempted
+                    ):
+                        continuation_attempts += 1
+                        query = ZERO_MUTATION_NUDGE
+                        continue
+                    raise
+
+                if pending:
+                    interactive = InteractiveInput()
+                    for pev in pending:
+                        fut = self._pending_answers[pev.interaction_id]
+                        try:
+                            answer = await fut
+                        finally:
+                            self._pending_answers.pop(
+                                pev.interaction_id, None
                             )
-                        if isinstance(ev, ToolCallResult) and self._mutations:
-                            self._mutations.refresh_after_hashes()
-                        if isinstance(ev, (ApprovalRequest, QuestionToUser)):
-                            loop = asyncio.get_running_loop()
-                            fut: asyncio.Future[Any] = loop.create_future()
-                            self._pending_answers[ev.interaction_id] = fut
-                            pending.append(ev)
-                            await self._bus.publish(ev)
-                            if self._auto_approve:
-                                await self._auto_resolve(ev, sid)
-                        else:
-                            if (
-                                isinstance(ev, AgentMessage)
-                                and not ev.stream
-                                and saw_stream_text
-                            ):
-                                continue
-                            await self._bus.publish(ev)
+                        _apply_interaction_answer(interactive, pev, answer)
+                    query = interactive
+                    continue
 
-                if not pending:
-                    break
+                # Headless code tasks: do not accept explore-only completion.
+                if (
+                    continuation_attempts < max_continuations
+                    and looks_like_implement_task(event.text)
+                    and not mutate_attempted
+                ):
+                    continuation_attempts += 1
+                    query = ZERO_MUTATION_NUDGE
+                    continue
 
-                interactive = InteractiveInput()
-                for pev in pending:
-                    fut = self._pending_answers[pev.interaction_id]
-                    try:
-                        answer = await fut
-                    finally:
-                        self._pending_answers.pop(pev.interaction_id, None)
-                    _apply_interaction_answer(interactive, pev, answer)
-
-                query = interactive
+                break
 
             if self._store is not None and assistant_parts:
                 self._store.add_message(

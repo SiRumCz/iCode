@@ -48,7 +48,36 @@ async def test_retries_when_first_chunk_stalls() -> None:
 
 
 @pytest.mark.asyncio
-async def test_midstream_stall_raises() -> None:
+async def test_midstream_stall_retries_when_enabled() -> None:
+    calls = {"n": 0}
+
+    def open_stream() -> AsyncIterator[Any]:
+        calls["n"] += 1
+
+        async def _gen() -> AsyncIterator[Any]:
+            if calls["n"] == 1:
+                yield "a"
+                await __import__("asyncio").sleep(10)
+                yield "b"
+                return
+            yield "continued"
+
+        return _gen()
+
+    out: list[Any] = []
+    async for chunk in iter_with_stall_retry(
+        open_stream,
+        stall_seconds=0.05,
+        max_retries=2,
+        retry_midstream=True,
+    ):
+        out.append(chunk)
+    assert out == ["a", "continued"]
+    assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_midstream_stall_raises_when_disabled() -> None:
     def open_stream() -> AsyncIterator[Any]:
         async def _gen() -> AsyncIterator[Any]:
             yield "a"
@@ -59,6 +88,9 @@ async def test_midstream_stall_raises() -> None:
 
     with pytest.raises(StreamStallError):
         async for _ in iter_with_stall_retry(
-            open_stream, stall_seconds=0.05, max_retries=1
+            open_stream,
+            stall_seconds=0.05,
+            max_retries=3,
+            retry_midstream=False,
         ):
             pass

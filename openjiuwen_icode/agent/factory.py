@@ -477,7 +477,12 @@ def create_agent(
     # Code profile: coding-oriented todo guidance (suppresses the default
     # TaskPlanningRail inject via isinstance check in create_deep_agent).
     if is_code_profile(agent_profile):
+        from openjiuwen_icode.rails.code_edit_nudge import (
+            CodeEditNudgeRail,
+        )
+
         rails.append(CodeTaskPlanningRail())
+        rails.append(CodeEditNudgeRail())
 
     # --- Interrupt rails ---
     # AskUserRail: intercepts ask_user tool calls and
@@ -641,9 +646,14 @@ class LocalBackend:
         *query* may be a plain string (normal user turn) or
         an ``InteractiveInput`` (interrupt resume).
 
-        Applies T-43 idle stall detection: if no first chunk arrives within
+        Applies T-43 idle stall detection: if no chunk arrives within
         the stall window, reopen the stream up to ``max_retries`` times.
+        Mid-stream stalls reopen with a continuation nudge so long
+        reasoning hangs do not abort the whole headless turn.
         """
+        from openjiuwen_icode.features.implement_gate import (
+            STALL_CONTINUATION_NUDGE,
+        )
         from openjiuwen_icode.features.stream_stall import (
             iter_with_stall_retry,
         )
@@ -654,15 +664,23 @@ class LocalBackend:
         apply_pending_workdir_cwd(self)
         await self._load_runtime_extensions()
         sid = session_id or self._session_id
+        attempt = {"n": 0}
 
         def _open() -> AsyncIterator[Any]:
+            attempt["n"] += 1
+            payload_query: Any = query
+            if attempt["n"] > 1 and isinstance(query, str):
+                payload_query = STALL_CONTINUATION_NUDGE
             return Runner.run_agent_streaming(
                 self.agent,
-                {"query": query},
+                {"query": payload_query},
                 session=sid,
             )
 
-        async for chunk in iter_with_stall_retry(_open):
+        async for chunk in iter_with_stall_retry(
+            _open,
+            retry_midstream=True,
+        ):
             yield chunk
 
     async def abort(self) -> None:
