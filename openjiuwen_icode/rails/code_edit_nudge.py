@@ -10,6 +10,10 @@ from openjiuwen.core.single_agent.prompts.builder import PromptSection
 from openjiuwen.core.single_agent.rail.base import AgentCallbackContext
 from openjiuwen.harness.rails.base import DeepAgentRail
 
+from openjiuwen_icode.features.implement_gate import (
+    extract_bash_command,
+    looks_like_git_archaeology,
+)
 from openjiuwen_icode.features.mutations import MUTATING_TOOLS
 
 _EXPLORE_TOOLS = frozenset(
@@ -51,7 +55,7 @@ class CodeEditNudgeRail(DeepAgentRail):
 
     priority = 85
 
-    def __init__(self, explore_budget: int = 8) -> None:
+    def __init__(self, explore_budget: int = 5) -> None:
         super().__init__()
         self.explore_budget = max(1, int(explore_budget))
         self._explore_count = 0
@@ -78,6 +82,13 @@ class CodeEditNudgeRail(DeepAgentRail):
             return
         if name in _EXPLORE_TOOLS:
             self._explore_count += 1
+            return
+        # Historical git searches burn the explore budget too — common
+        # failure mode on pruned LoLBench base checkouts.
+        if name == "bash":
+            cmd = extract_bash_command(getattr(inputs, "tool_args", None))
+            if looks_like_git_archaeology(cmd):
+                self._explore_count += 1
 
     async def before_model_call(self, ctx: AgentCallbackContext) -> None:
         builder = self.system_prompt_builder

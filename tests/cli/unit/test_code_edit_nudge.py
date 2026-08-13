@@ -26,6 +26,27 @@ class _FakeBuilder:
 
 
 @pytest.mark.asyncio
+async def test_nudge_counts_git_archaeology_bash() -> None:
+    rail = CodeEditNudgeRail(explore_budget=2)
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    for _ in range(2):
+        await rail.after_tool_call(
+            SimpleNamespace(
+                inputs=SimpleNamespace(
+                    tool_name="bash",
+                    tool_args={
+                        "command": "git log --all --oneline | head -20"
+                    },
+                )
+            )
+        )
+    await rail.before_model_call(MagicMock())
+    assert "code_edit_nudge" in builder.sections
+
+
+@pytest.mark.asyncio
 async def test_nudge_injects_after_explore_budget() -> None:
     rail = CodeEditNudgeRail(explore_budget=3)
     builder = _FakeBuilder()

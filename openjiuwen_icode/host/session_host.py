@@ -384,18 +384,26 @@ class SessionHost:
 
                 # Headless code tasks: require mutate → (full edit) → verify
                 # → submit when the user asked for an implement/deliver task.
-                if continuation_attempts < max_continuations:
-                    nudge = next_implement_continuation(
-                        user_text=event.text,
-                        mutate_attempted=mutate_attempted,
-                        verify_attempted=verify_attempted,
-                        submit_attempted=submit_attempted,
-                        shallow_only=shallow_only,
+                nudge = next_implement_continuation(
+                    user_text=event.text,
+                    mutate_attempted=mutate_attempted,
+                    verify_attempted=verify_attempted,
+                    submit_attempted=submit_attempted,
+                    shallow_only=shallow_only,
+                )
+                if nudge is not None and continuation_attempts < max_continuations:
+                    continuation_attempts += 1
+                    query = nudge
+                    continue
+
+                # Fail closed: do not report success with an empty patch /
+                # explore-only trajectory on implement tasks.
+                if nudge is not None and self._auto_approve:
+                    from openjiuwen_icode.features.implement_gate import (
+                        INCOMPLETE_IMPLEMENT_ERROR,
                     )
-                    if nudge is not None:
-                        continuation_attempts += 1
-                        query = nudge
-                        continue
+
+                    raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
 
                 break
 

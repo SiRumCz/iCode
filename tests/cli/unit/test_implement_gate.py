@@ -86,6 +86,19 @@ def test_non_shallow_when_parser_added() -> None:
     assert not is_shallow_signature_edit(old, new)
 
 
+def test_looks_like_git_archaeology() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        looks_like_git_archaeology,
+    )
+
+    assert looks_like_git_archaeology(
+        "git log --all --oneline --grep=comprehension | head"
+    )
+    assert looks_like_git_archaeology("git for-each-ref --format=...")
+    assert not looks_like_git_archaeology("cargo check -p ruff")
+    assert not looks_like_git_archaeology("git status")
+
+
 def test_next_implement_continuation_chain() -> None:
     text = "Implement --config overrides then run lolbench-submit"
     assert (

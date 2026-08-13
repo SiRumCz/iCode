@@ -83,8 +83,15 @@ ZERO_MUTATION_NUDGE = (
     "You analyzed the codebase but did not modify any files. "
     "The user asked you to implement changes. Call `edit_file` or "
     "`write_file` now to apply a concrete patch in the worktree. "
+    "Do not search git history for an upstream PR — this checkout is often "
+    "at a pruned base commit with no solution commits to find. "
     "Do not stop after another design essay. When the patch is in place, "
     "run any required submit/deliver command (for example `lolbench-submit`)."
+)
+
+INCOMPLETE_IMPLEMENT_ERROR = (
+    "implement task incomplete: no qualifying code changes / verify / submit "
+    "before headless continuations were exhausted"
 )
 
 SHALLOW_EDIT_NUDGE = (
@@ -237,7 +244,27 @@ def next_implement_continuation(
     return None
 
 
+def looks_like_git_archaeology(command: str) -> bool:
+    """Return True when *command* is mostly historical git archaeology."""
+    if not command or not str(command).strip():
+        return False
+    lower = str(command).lower()
+    if "git " not in lower and not lower.startswith("git"):
+        return False
+    archaeology = (
+        "git log",
+        "git blame",
+        "git show ",
+        "git for-each-ref",
+        "git branch",
+        "git rev-list",
+        "git reflog",
+    )
+    return any(tok in lower for tok in archaeology)
+
+
 __all__ = [
+    "INCOMPLETE_IMPLEMENT_ERROR",
     "SHALLOW_EDIT_NUDGE",
     "STALL_CONTINUATION_NUDGE",
     "SUBMIT_NUDGE",
@@ -246,6 +273,7 @@ __all__ = [
     "edit_args_look_shallow",
     "extract_bash_command",
     "is_shallow_signature_edit",
+    "looks_like_git_archaeology",
     "looks_like_implement_task",
     "looks_like_submit_command",
     "looks_like_verify_command",

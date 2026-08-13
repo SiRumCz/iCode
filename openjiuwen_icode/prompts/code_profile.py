@@ -59,7 +59,7 @@ When the user asks you to implement, fix, add, refactor, or otherwise change cod
 
 1. Orient briefly: locate the few relevant files (a small number of grep/read calls).
 2. Edit immediately with `edit_file` / `write_file`. Do not stop after analysis or a design write-up.
-3. Prefer concrete patches in the worktree over reconstructing upstream PRs from memory.
+3. Prefer concrete patches in the worktree over reconstructing upstream PRs from memory. Do not spend the session on `git log` archaeology — eval checkouts are often pruned to the base commit with no solution history.
 4. Do not stop after signature/docs-only edits (e.g. changing a field type). Wire parsers, validation, call sites, and apply/resolve logic the behavior needs.
 5. After edits, verify with `bash` (compile/check or targeted tests; for Rust prefer `cargo check` / focused `cargo test`) and fix failures.
 6. If the user names a deliverable command or artifact (for example `lolbench-submit`, a patch path), run it / produce it before finishing.
@@ -72,7 +72,7 @@ CODE_EXECUTION_POLICY_CN = """\
 
 1. 先短暂定位：用少量 grep/read 找到相关文件。
 2. 立刻用 `edit_file` / `write_file` 改代码；不要停在分析或设计长文。
-3. 优先在工作区落小补丁，而不是凭记忆复刻上游 PR。
+3. 优先在工作区落小补丁，而不是凭记忆复刻上游 PR。不要把会话花在 `git log` 考古上——评测工作区常常只保留 base commit，没有可找回的上游解。
 4. 不要停在仅改类型签名/文档（例如只改字段类型）；补齐 parser、校验、call site 与 apply/resolve 等行为所需逻辑。
 5. 改完后用 `bash` 做编译/检查或针对性测试（Rust 优先 `cargo check` / 聚焦 `cargo test`），并根据失败继续修。
 6. 若用户指定了交付命令或产物（例如 `lolbench-submit`、patch 路径），结束前必须执行/生成。
