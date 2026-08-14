@@ -41,6 +41,21 @@ def test_record_and_rollback(tmp_path: Path) -> None:
     assert tracker.list_turns() == []
 
 
+def test_has_workspace_changes(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    target = ws / "a.txt"
+    target.write_text("v1\n", encoding="utf-8")
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("sess-1")
+    tracker.record_tool_mutation("edit_file", {"path": str(target)})
+    assert tracker.has_workspace_changes() is False
+    target.write_text("v2\n", encoding="utf-8")
+    tracker.refresh_after_hashes()
+    assert tracker.has_workspace_changes() is True
+
+
 def test_ignores_non_mutating_tools(tmp_path: Path) -> None:
     tracker = MutationTracker(tmp_path / "mut", workspace=tmp_path)
     tracker.begin_turn("s")

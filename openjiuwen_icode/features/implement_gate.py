@@ -247,6 +247,13 @@ ZERO_MUTATION_NUDGE = (
     "run any required submit/deliver command (for example `lolbench-submit`)."
 )
 
+WORKTREE_NUDGE = (
+    "Your edit/write tools did not change any files in the worktree "
+    "(wrong path, failed edit, or read-only target). Call `edit_file` or "
+    "`write_file` on the real source paths under the repo cwd, confirm the "
+    "files actually changed, then run verification again."
+)
+
 INCOMPLETE_IMPLEMENT_ERROR = (
     "implement task incomplete: no qualifying code changes / verify / submit "
     "before headless continuations were exhausted"
@@ -747,26 +754,28 @@ def _keyword_in_command(keyword: str, command_lower: str) -> bool:
 def pytest_command_matches_task_scope(user_text: str, command: str) -> bool:
     """Return True when a targeted pytest run matches the task's feature area.
 
-    Broad invocations like ``pytest -q`` are accepted. Narrow runs against a
-    single ``tests/test_*.py`` module must mention a repeated task keyword
-    (for example ``snapshot`` on snapshot tasks), so passing unrelated legacy
-    tests does not satisfy the Python verify gate.
+    When the prompt names a distinctive feature area, pytest must mention at
+    least one repeated keyword in the command, path, or ``-k`` expression.
+    Bare ``pytest -q`` against an unchanged base checkout is not enough — it
+    can pass while new fail-to-pass tests (added only at grading time) still
+    fail.
     """
     if not user_text or not command or not looks_like_python_suite_command(command):
         return True
-    keywords = _shared_api_stems(user_text)
-    if not keywords:
-        keywords = _repeated_task_keywords(user_text)
+    stem_keywords = _shared_api_stems(user_text)
+    repeated_keywords = _repeated_task_keywords(user_text)
+    keywords = stem_keywords | repeated_keywords
     if not keywords:
         return True
     lower = str(command).lower()
     if re.search(r"tests/test_[\w.-]+\.py", lower):
-        return any(_keyword_in_command(kw, lower) for kw in keywords)
+        scoped = stem_keywords or repeated_keywords
+        return any(_keyword_in_command(kw, lower) for kw in scoped)
     match = re.search(r"\b-k(?:=|\s+)(['\"]?)([\w.-]+)\1", lower)
     if match:
         expr = match.group(2)
         return any(_keyword_in_command(kw, expr) for kw in keywords)
-    return True
+    return any(_keyword_in_command(kw, lower) for kw in keywords)
 
 
 def extract_required_prompt_symbols(text: str) -> tuple[str, ...]:
@@ -900,6 +909,7 @@ def next_implement_continuation(
     shallow_only: bool,
     integration_attempted: bool = True,
     missing_symbols: tuple[str, ...] | list[str] = (),
+    workspace_mutated: bool = True,
     native_mutated: bool = False,
     native_build_verified: bool = False,
     python_mutated: bool = False,
@@ -912,6 +922,8 @@ def next_implement_continuation(
         return None
     if not mutate_attempted:
         return ZERO_MUTATION_NUDGE
+    if not workspace_mutated:
+        return WORKTREE_NUDGE
     if shallow_only:
         return SHALLOW_EDIT_NUDGE
     if not integration_attempted:
@@ -964,6 +976,7 @@ __all__ = [
     "SUBMIT_NUDGE",
     "VERIFY_FAILED_NUDGE",
     "VERIFY_NUDGE",
+    "WORKTREE_NUDGE",
     "ZERO_MUTATION_NUDGE",
     "bash_result_succeeded",
     "edit_args_look_shallow",

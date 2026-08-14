@@ -24,6 +24,7 @@ from openjiuwen_icode.features.implement_gate import (
     looks_like_verify_command,
     mutation_args_touch_native,
     next_implement_continuation,
+    pytest_command_matches_task_scope,
     task_requires_submit,
     verify_command_qualifies_for_completion,
 )
@@ -561,10 +562,8 @@ def test_snapshot_task_symbol_extraction_and_missing() -> None:
     assert "start_monitor" in missing
     assert "id" in missing
 
-    assert pytest_command_matches_task_scope(task, "pytest -q")
-    assert not pytest_command_matches_task_scope(
-        task, "pytest -q tests/test_monitor.py"
-    )
+    assert not pytest_command_matches_task_scope(task, "pytest -q")
+    assert not pytest_command_matches_task_scope(task, "pytest -q tests/test_monitor.py")
     assert pytest_command_matches_task_scope(
         task, "pytest -q tests/test_snapshot.py"
     )
@@ -574,6 +573,17 @@ def test_python_verify_requires_task_scoped_pytest() -> None:
     task = (
         "Add snapshot support with capture_snapshot and format_snapshot_diff. "
         "Snapshots snapshots snapshots."
+    )
+    assert not pytest_command_matches_task_scope(task, "pytest -q")
+    assert (
+        verify_command_qualifies_for_completion(
+            "pytest -q",
+            native_mutated=False,
+            python_mutated=True,
+            success=True,
+            user_text=task,
+        )
+        is False
     )
     assert (
         verify_command_qualifies_for_completion(
@@ -594,4 +604,34 @@ def test_python_verify_requires_task_scoped_pytest() -> None:
             user_text=task,
         )
         is True
+    )
+
+
+def test_bare_pytest_rejected_when_task_has_feature_keywords() -> None:
+    task = (
+        "`name_mapping` gains `aliases` and `alias_style`. "
+        "Loading resolves aliases with ordered alias fallback. "
+        "Aliases are literal under `name_style`."
+    )
+    assert not pytest_command_matches_task_scope(task, "pytest -q")
+    assert pytest_command_matches_task_scope(
+        task, "pytest -q tests/integration/morphing/test_aliases.py"
+    )
+
+
+def test_worktree_nudge_when_edits_do_not_change_files() -> None:
+    from openjiuwen_icode.features.implement_gate import WORKTREE_NUDGE
+
+    text = "Implement alias support in name_mapping."
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
+            submit_attempted=False,
+            shallow_only=False,
+            workspace_mutated=False,
+        )
+        == WORKTREE_NUDGE
     )

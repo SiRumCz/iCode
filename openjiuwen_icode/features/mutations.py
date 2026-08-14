@@ -189,6 +189,17 @@ class MutationTracker:
                 if not mut.snapshot_after:
                     mut.snapshot_after = self._snapshot_file(path, "after")
 
+    def has_workspace_changes(self) -> bool:
+        """Return True when the open turn changed at least one file on disk."""
+        if self._current is None:
+            return False
+        for mut in self._current.files:
+            if mut.kind == "create" and mut.after_hash:
+                return True
+            if mut.after_hash and mut.after_hash != mut.before_hash:
+                return True
+        return False
+
     def list_turns(self) -> list[TurnMutations]:
         return list(self._turns)
 

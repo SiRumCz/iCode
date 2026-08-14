@@ -321,6 +321,10 @@ class SessionHost:
                     user_text=event.text,
                     mutation_blob="\n".join(mutation_blob_parts),
                 )
+                workspace_mutated = (
+                    self._mutations is not None
+                    and self._mutations.has_workspace_changes()
+                )
                 return next_implement_continuation(
                     user_text=event.text,
                     mutate_attempted=mutate_attempted,
@@ -330,6 +334,7 @@ class SessionHost:
                     shallow_only=shallow_only,
                     integration_attempted=integration_attempted,
                     missing_symbols=missing,
+                    workspace_mutated=workspace_mutated,
                     native_mutated=native_mutated,
                     native_build_verified=native_build_verified,
                     python_mutated=python_mutated,
