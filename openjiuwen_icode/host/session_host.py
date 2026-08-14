@@ -274,17 +274,21 @@ class SessionHost:
         assistant_parts: list[str] = []
         mutate_attempted = False
         verify_attempted = False
+        verify_succeeded = False
         submit_attempted = False
         shallow_only = True
         continuation_attempts = 0
-        # Allow zero-mutation → shallow → verify → submit chain in headless.
-        max_continuations = 3 if self._auto_approve else 0
+        # Allow zero-mutation → shallow → verify → verify-failed → submit
+        # chain in headless implement tasks.
+        max_continuations = 5 if self._auto_approve else 0
         if self._mutations is not None and sid:
             self._mutations.begin_turn(sid)
         try:
             from openjiuwen_icode.features.implement_gate import (
+                bash_result_succeeded,
                 edit_args_look_shallow,
                 extract_bash_command,
+                extract_bash_command_from_result,
                 looks_like_submit_command,
                 looks_like_verify_command,
                 next_implement_continuation,
@@ -319,6 +323,7 @@ class SessionHost:
                             if isinstance(ev, ToolCallStart):
                                 if ev.tool_name in MUTATING_TOOLS:
                                     mutate_attempted = True
+                                    verify_succeeded = False
                                     if not edit_args_look_shallow(
                                         ev.tool_args
                                     ):
@@ -335,8 +340,25 @@ class SessionHost:
                                     self._mutations.record_tool_mutation(
                                         ev.tool_name, ev.tool_args
                                     )
-                            if isinstance(ev, ToolCallResult) and self._mutations:
-                                self._mutations.refresh_after_hashes()
+                            if isinstance(ev, ToolCallResult):
+                                if ev.tool_name == "bash":
+                                    cmd = extract_bash_command_from_result(
+                                        ev.result
+                                    )
+                                    if looks_like_verify_command(cmd):
+                                        verify_attempted = True
+                                        ok = bash_result_succeeded(
+                                            ev.result,
+                                            tool_success=ev.tool_success,
+                                        )
+                                        if ok is True:
+                                            verify_succeeded = True
+                                        elif ok is False:
+                                            verify_succeeded = False
+                                    if looks_like_submit_command(cmd):
+                                        submit_attempted = True
+                                if self._mutations:
+                                    self._mutations.refresh_after_hashes()
                             if isinstance(ev, (ApprovalRequest, QuestionToUser)):
                                 loop = asyncio.get_running_loop()
                                 fut: asyncio.Future[Any] = loop.create_future()
@@ -359,6 +381,7 @@ class SessionHost:
                             user_text=event.text,
                             mutate_attempted=mutate_attempted,
                             verify_attempted=verify_attempted,
+                            verify_succeeded=verify_succeeded,
                             submit_attempted=submit_attempted,
                             shallow_only=shallow_only,
                         )
@@ -388,6 +411,7 @@ class SessionHost:
                     user_text=event.text,
                     mutate_attempted=mutate_attempted,
                     verify_attempted=verify_attempted,
+                    verify_succeeded=verify_succeeded,
                     submit_attempted=submit_attempted,
                     shallow_only=shallow_only,
                 )

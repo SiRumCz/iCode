@@ -107,10 +107,20 @@ SHALLOW_EDIT_NUDGE = (
 VERIFY_NUDGE = (
     "You modified files but have not verified the build/tests. "
     "Call `bash` now to run a compile or targeted test command appropriate "
-    "for this repo (for Rust: `cargo check` or a focused `cargo test`). "
+    "for this repo (for Rust: `cargo check` or a focused `cargo test`; "
+    "for CPython: `make regen-pegen regen-ast` then "
+    "`CCACHE_DISABLE=1 make -j2 python`). "
     "Fix any errors that appear, then continue. If the user required a "
-    "submit/deliver command (for example `lolbench-submit`), run it after "
-    "verification succeeds."
+    "submit/deliver command (for example `lolbench-submit`), run it only "
+    "after verification succeeds."
+)
+
+VERIFY_FAILED_NUDGE = (
+    "Your last compile/test command failed (non-zero exit). "
+    "Read the errors, fix the code, and re-run verification via `bash` "
+    "until it succeeds. Do not run the submit/deliver command "
+    "(for example `lolbench-submit`) while the build or smoke test is still "
+    "failing."
 )
 
 SUBMIT_NUDGE = (
@@ -164,6 +174,9 @@ def looks_like_verify_command(command: str) -> bool:
     # CPython / autotools: interpreter rebuild smoke checks.
     if "make" in lower and "python" in lower:
         return True
+    # CPython grammar/AST regeneration after editing python.gram / Python.asdl.
+    if re.search(r"\bregen-(?:pegen|ast|token|keyword)\b", lower):
+        return True
     # Inline smoke tests (common on LoLBench CPython tasks).
     if re.search(r"(?:\./)?python(?:3(?:\.\d+)?)?\s+-c\b", lower):
         return True
@@ -214,6 +227,30 @@ def is_shallow_signature_edit(old_string: str, new_string: str) -> bool:
     return False
 
 
+def extract_bash_command_from_result(result: Any) -> str:
+    """Best-effort extract of the shell command from a bash tool result."""
+    text = result if isinstance(result, str) else str(result or "")
+    match = re.search(r"Command:\s*(.+?)(?:\n|$)", text)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def bash_result_succeeded(
+    result: Any,
+    *,
+    tool_success: bool | None = None,
+) -> bool | None:
+    """Return True/False for bash exit status, or None if unknown."""
+    if tool_success is not None:
+        return bool(tool_success)
+    text = result if isinstance(result, str) else str(result or "")
+    match = re.search(r"Exit Code:\s*(\d+)", text, re.IGNORECASE)
+    if match:
+        return int(match.group(1)) == 0
+    return None
+
+
 def edit_args_look_shallow(tool_args: Any) -> bool:
     """Return True when edit_file/write args look like a shallow signature edit."""
     args = tool_args
@@ -237,6 +274,7 @@ def next_implement_continuation(
     user_text: str,
     mutate_attempted: bool,
     verify_attempted: bool,
+    verify_succeeded: bool,
     submit_attempted: bool,
     shallow_only: bool,
 ) -> str | None:
@@ -247,12 +285,9 @@ def next_implement_continuation(
         return ZERO_MUTATION_NUDGE
     if shallow_only:
         return SHALLOW_EDIT_NUDGE
-    # When the user named an explicit submit step, a successful submit is the
-    # deliverable — do not fail closed because verify heuristics missed a
-    # repo-specific build command (e.g. `make python`, `./python -c`).
-    if task_requires_submit(user_text) and submit_attempted:
-        return None
-    if not verify_attempted:
+    if not verify_succeeded:
+        if verify_attempted:
+            return VERIFY_FAILED_NUDGE
         return VERIFY_NUDGE
     if task_requires_submit(user_text) and not submit_attempted:
         return SUBMIT_NUDGE
@@ -283,10 +318,13 @@ __all__ = [
     "SHALLOW_EDIT_NUDGE",
     "STALL_CONTINUATION_NUDGE",
     "SUBMIT_NUDGE",
+    "VERIFY_FAILED_NUDGE",
     "VERIFY_NUDGE",
     "ZERO_MUTATION_NUDGE",
+    "bash_result_succeeded",
     "edit_args_look_shallow",
     "extract_bash_command",
+    "extract_bash_command_from_result",
     "is_shallow_signature_edit",
     "looks_like_git_archaeology",
     "looks_like_implement_task",

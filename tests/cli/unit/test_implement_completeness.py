@@ -69,6 +69,7 @@ async def test_verify_clears_nudge_after_real_edit() -> None:
                         "}\n"
                     ),
                 },
+                tool_result=None,
             )
         )
     )
@@ -77,11 +78,55 @@ async def test_verify_clears_nudge_after_real_edit() -> None:
             inputs=SimpleNamespace(
                 tool_name="bash",
                 tool_args={"command": "cargo check -p ruff"},
+                tool_result=SimpleNamespace(
+                    success=True,
+                    data=(
+                        "Command: cargo check -p ruff\n"
+                        "Stdout: ok\nExit Code: 0"
+                    ),
+                ),
             )
         )
     )
     await rail.before_model_call(MagicMock())
     assert "implement_completeness" not in builder.sections
+
+
+@pytest.mark.asyncio
+async def test_failed_verify_keeps_nudge() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="write_file",
+                tool_args={
+                    "file_path": "/tmp/x.rs",
+                    "content": "fn main() {}\n",
+                },
+                tool_result=None,
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "CCACHE_DISABLE=1 make -j2 python"},
+                tool_result=SimpleNamespace(
+                    success=False,
+                    data=(
+                        "Command: CCACHE_DISABLE=1 make -j2 python\n"
+                        "Stdout: gcc error\nExit Code: 2"
+                    ),
+                ),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" in builder.sections
 
 
 @pytest.mark.asyncio

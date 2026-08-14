@@ -7,10 +7,13 @@ from __future__ import annotations
 from openjiuwen_icode.features.implement_gate import (
     SHALLOW_EDIT_NUDGE,
     SUBMIT_NUDGE,
+    VERIFY_FAILED_NUDGE,
     VERIFY_NUDGE,
     ZERO_MUTATION_NUDGE,
+    bash_result_succeeded,
     edit_args_look_shallow,
     extract_bash_command,
+    extract_bash_command_from_result,
     is_shallow_signature_edit,
     looks_like_implement_task,
     looks_like_submit_command,
@@ -39,6 +42,7 @@ def test_verify_and_submit_command_detection() -> None:
     assert looks_like_verify_command("cd /workspace/ruff && cargo test --test x")
     assert looks_like_verify_command("pytest -q")
     assert looks_like_verify_command("CCACHE_DISABLE=1 make -j2 python")
+    assert looks_like_verify_command("make regen-pegen regen-ast")
     assert looks_like_verify_command("./python -c \"import ast; assert True\"")
     assert looks_like_verify_command("python -m pytest -q")
     assert not looks_like_verify_command("ls crates")
@@ -48,6 +52,22 @@ def test_verify_and_submit_command_detection() -> None:
     assert extract_bash_command({"command": "cargo check"}) == "cargo check"
     assert task_requires_submit("run lolbench-submit when done")
     assert not task_requires_submit("implement the feature")
+
+
+def test_bash_result_success_detection() -> None:
+    ok = (
+        "Command: make -j2 python\nStdout: built\nStderr: (empty)\n"
+        "Exit Code: 0"
+    )
+    fail = (
+        "Command: make -j2 python\nStdout: gcc error\nStderr: err\n"
+        "Exit Code: 2"
+    )
+    assert bash_result_succeeded(ok) is True
+    assert bash_result_succeeded(fail) is False
+    assert bash_result_succeeded("no exit info") is None
+    assert bash_result_succeeded("", tool_success=True) is True
+    assert extract_bash_command_from_result(ok) == "make -j2 python"
 
 
 def test_shallow_signature_edit_option_to_vec() -> None:
@@ -109,6 +129,7 @@ def test_next_implement_continuation_chain() -> None:
             user_text=text,
             mutate_attempted=False,
             verify_attempted=False,
+            verify_succeeded=False,
             submit_attempted=False,
             shallow_only=True,
         )
@@ -119,6 +140,7 @@ def test_next_implement_continuation_chain() -> None:
             user_text=text,
             mutate_attempted=True,
             verify_attempted=False,
+            verify_succeeded=False,
             submit_attempted=False,
             shallow_only=True,
         )
@@ -129,6 +151,7 @@ def test_next_implement_continuation_chain() -> None:
             user_text=text,
             mutate_attempted=True,
             verify_attempted=False,
+            verify_succeeded=False,
             submit_attempted=False,
             shallow_only=False,
         )
@@ -139,6 +162,18 @@ def test_next_implement_continuation_chain() -> None:
             user_text=text,
             mutate_attempted=True,
             verify_attempted=True,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=False,
+        )
+        == VERIFY_FAILED_NUDGE
+    )
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
             submit_attempted=False,
             shallow_only=False,
         )
@@ -149,6 +184,7 @@ def test_next_implement_continuation_chain() -> None:
             user_text=text,
             mutate_attempted=True,
             verify_attempted=True,
+            verify_succeeded=True,
             submit_attempted=True,
             shallow_only=False,
         )
@@ -156,15 +192,31 @@ def test_next_implement_continuation_chain() -> None:
     )
 
 
-def test_submit_completes_lolbench_task_without_recognized_verify() -> None:
+def test_submit_before_verify_does_not_complete() -> None:
+    text = "Implement --config overrides then run lolbench-submit"
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=False,
+            submit_attempted=True,
+            shallow_only=False,
+        )
+        == VERIFY_FAILED_NUDGE
+    )
+
+
+def test_submit_without_verify_attempt_still_needs_verify() -> None:
     text = "Implement --config overrides then run lolbench-submit"
     assert (
         next_implement_continuation(
             user_text=text,
             mutate_attempted=True,
             verify_attempted=False,
+            verify_succeeded=False,
             submit_attempted=True,
             shallow_only=False,
         )
-        is None
+        == VERIFY_NUDGE
     )

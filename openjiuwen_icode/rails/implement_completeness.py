@@ -11,8 +11,10 @@ from openjiuwen.core.single_agent.rail.base import AgentCallbackContext
 from openjiuwen.harness.rails.base import DeepAgentRail
 
 from openjiuwen_icode.features.implement_gate import (
+    bash_result_succeeded,
     edit_args_look_shallow,
     extract_bash_command,
+    extract_bash_command_from_result,
     looks_like_submit_command,
     looks_like_verify_command,
 )
@@ -39,13 +41,25 @@ _VERIFY_EN = (
     "## Verify reminder\n"
     "You already modified files. Before finishing, run a compile or "
     "targeted test via `bash`. Fix failures. If the user named a submit "
-    "command (e.g. `lolbench-submit`), run it after verification."
+    "command (e.g. `lolbench-submit`), run it only after verification "
+    "succeeds."
+)
+
+_VERIFY_FAILED_EN = (
+    "## Verification failed\n"
+    "Your last compile/test command exited with an error. Fix the "
+    "failures and re-run verification via `bash` before submitting."
 )
 
 _VERIFY_CN = (
     "## 验证提醒\n"
     "你已修改文件。结束前请用 `bash` 跑编译或针对性测试，并根据报错继续修。"
     "若用户要求提交命令（例如 `lolbench-submit`），验证通过后再执行。"
+)
+
+_VERIFY_FAILED_CN = (
+    "## 验证失败\n"
+    "最近一次编译/测试命令失败。请先修复错误并重新验证，再执行提交命令。"
 )
 
 
@@ -59,6 +73,7 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._mutated = False
         self._shallow_only = True
         self._verify_attempted = False
+        self._verify_succeeded = False
         self._submit_attempted = False
         self.system_prompt_builder = None
         self._agent: Any = None
@@ -71,16 +86,19 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._mutated = False
         self._shallow_only = True
         self._verify_attempted = False
+        self._verify_succeeded = False
         self._submit_attempted = False
 
     async def after_tool_call(self, ctx: AgentCallbackContext) -> None:
         inputs = ctx.inputs
         name = str(getattr(inputs, "tool_name", "") or "")
         args = getattr(inputs, "tool_args", None)
+        tool_result = getattr(inputs, "tool_result", None)
         if not name:
             return
         if name in MUTATING_TOOLS:
             self._mutated = True
+            self._verify_succeeded = False
             if not edit_args_look_shallow(args):
                 self._shallow_only = False
             return
@@ -90,6 +108,21 @@ class ImplementCompletenessRail(DeepAgentRail):
                 self._verify_attempted = True
             if looks_like_submit_command(cmd):
                 self._submit_attempted = True
+            if tool_result is not None:
+                result_cmd = cmd or extract_bash_command_from_result(
+                    tool_result
+                )
+                if looks_like_verify_command(result_cmd):
+                    self._verify_attempted = True
+                    ok = bash_result_succeeded(
+                        tool_result,
+                        tool_success=getattr(tool_result, "success", None),
+                    )
+                    if ok is True:
+                        self._verify_succeeded = True
+                    elif ok is False:
+                        self._verify_succeeded = False
+            return
 
     async def before_model_call(self, ctx: AgentCallbackContext) -> None:
         builder = self.system_prompt_builder
@@ -101,7 +134,7 @@ class ImplementCompletenessRail(DeepAgentRail):
 
         if not self._mutated:
             return
-        if self._verify_attempted and not self._shallow_only:
+        if self._verify_succeeded and not self._shallow_only:
             return
 
         lang = getattr(builder, "language", "en") or "en"
@@ -109,6 +142,13 @@ class ImplementCompletenessRail(DeepAgentRail):
         if self._shallow_only:
             text = _SHALLOW_CN if zh else _SHALLOW_EN
             content = {"en": _SHALLOW_EN, "cn": _SHALLOW_CN, lang: text}
+        elif self._verify_attempted and not self._verify_succeeded:
+            text = _VERIFY_FAILED_CN if zh else _VERIFY_FAILED_EN
+            content = {
+                "en": _VERIFY_FAILED_EN,
+                "cn": _VERIFY_FAILED_CN,
+                lang: text,
+            }
         else:
             text = _VERIFY_CN if zh else _VERIFY_EN
             content = {"en": _VERIFY_EN, "cn": _VERIFY_CN, lang: text}
