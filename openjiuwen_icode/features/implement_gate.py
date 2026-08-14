@@ -60,10 +60,11 @@ _NATIVE_SOURCE_SUFFIXES = (
     ".cc",
     ".cxx",
     ".rs",
-    ".go",
 )
 
 _PYTHON_SOURCE_SUFFIXES = (".py",)
+
+_GO_SOURCE_SUFFIXES = (".go",)
 
 _SUBMIT_HINTS = (
     "lolbench-submit",
@@ -326,6 +327,15 @@ PYTHON_SUITE_NUDGE = (
     "fix failures, and re-run until they pass before finishing."
 )
 
+GO_SUITE_NUDGE = (
+    "You edited Go sources but have not run `go test` on the packages you "
+    "touched. `go build` / `go vet` compile or lint only — they do not run "
+    "tests. Call `bash` now with a targeted `go test` (for example "
+    "`go test ./evaluator ./parser -count=1`), fix failures, and re-run "
+    "until tests pass. Do not leave build output binaries (e.g. `./main`, "
+    "`./abs`) in the repo — use `/tmp` or remove them before finishing."
+)
+
 
 def looks_like_implement_task(text: str) -> bool:
     """Return True when *text* looks like a coding implementation request."""
@@ -404,6 +414,14 @@ def is_python_source_path(path: str) -> bool:
     return lower.endswith(_PYTHON_SOURCE_SUFFIXES)
 
 
+def is_go_source_path(path: str) -> bool:
+    """Return True when *path* looks like a Go source file."""
+    if not path or not str(path).strip():
+        return False
+    lower = str(path).lower().split("?", 1)[0]
+    return lower.endswith(_GO_SOURCE_SUFFIXES)
+
+
 def _mutation_args_touch_suffixes(
     tool_args: Any,
     *,
@@ -435,6 +453,13 @@ def mutation_args_touch_python(tool_args: Any) -> bool:
     """Return True when edit/write args target a Python source file."""
     return _mutation_args_touch_suffixes(
         tool_args, predicate=is_python_source_path
+    )
+
+
+def mutation_args_touch_go(tool_args: Any) -> bool:
+    """Return True when edit/write args target a Go source file."""
+    return _mutation_args_touch_suffixes(
+        tool_args, predicate=is_go_source_path
     )
 
 
@@ -480,12 +505,24 @@ def looks_like_python_suite_command(command: str) -> bool:
     return False
 
 
+def looks_like_go_suite_command(command: str) -> bool:
+    """Return True when *command* runs Go tests.
+
+    ``go build`` / ``go vet`` alone do not count — they compile or lint only.
+    """
+    if not command or not str(command).strip():
+        return False
+    lower = str(command).lower()
+    return bool(re.search(r"\bgo\s+test\b", lower))
+
+
 def verify_command_qualifies_for_completion(
     command: str,
     *,
     native_mutated: bool,
     success: bool,
     python_mutated: bool = False,
+    go_mutated: bool = False,
     user_text: str = "",
 ) -> bool:
     """Return True when a successful verify command completes the verify gate."""
@@ -498,6 +535,10 @@ def verify_command_qualifies_for_completion(
         if not looks_like_python_suite_command(command):
             return False
         if user_text and not pytest_command_matches_task_scope(user_text, command):
+            return False
+    # Pure-Go edits: require go test, not go build / go vet alone.
+    if go_mutated and not native_mutated:
+        if not looks_like_go_suite_command(command):
             return False
     return True
 
@@ -863,6 +904,8 @@ def next_implement_continuation(
     native_build_verified: bool = False,
     python_mutated: bool = False,
     python_suite_verified: bool = False,
+    go_mutated: bool = False,
+    go_suite_verified: bool = False,
 ) -> str | None:
     """Pick the next headless continuation nudge, or None if done."""
     if not looks_like_implement_task(user_text):
@@ -877,6 +920,8 @@ def next_implement_continuation(
         return prompt_symbol_nudge(tuple(missing_symbols))
     if native_mutated and not native_build_verified:
         return NATIVE_BUILD_NUDGE
+    if go_mutated and not native_mutated and not go_suite_verified:
+        return GO_SUITE_NUDGE
     if python_mutated and not native_mutated and not python_suite_verified:
         return PYTHON_SUITE_NUDGE
     if not verify_succeeded:
@@ -909,6 +954,7 @@ def looks_like_git_archaeology(command: str) -> bool:
 
 __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
+    "GO_SUITE_NUDGE",
     "INTEGRATION_NUDGE",
     "NATIVE_BUILD_NUDGE",
     "PROMPT_SYMBOL_NUDGE_TEMPLATE",
@@ -924,16 +970,19 @@ __all__ = [
     "extract_bash_command",
     "extract_bash_command_from_result",
     "extract_required_prompt_symbols",
+    "is_go_source_path",
     "is_native_source_path",
     "is_python_source_path",
     "is_shallow_signature_edit",
     "looks_like_git_archaeology",
+    "looks_like_go_suite_command",
     "looks_like_implement_task",
     "looks_like_native_build_command",
     "looks_like_python_suite_command",
     "looks_like_submit_command",
     "looks_like_verify_command",
     "missing_prompt_symbols",
+    "mutation_args_touch_go",
     "mutation_args_touch_native",
     "mutation_args_touch_python",
     "mutation_text_from_args",

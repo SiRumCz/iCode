@@ -65,7 +65,7 @@ When the user asks you to implement, fix, add, refactor, or otherwise change cod
 4. Do not stop after signature/docs-only edits (e.g. changing a field type). Wire parsers, validation, call sites, and apply/resolve logic the behavior needs.
 5. Prefer editing existing entrypoints over inventing a parallel module that is never registered or called. If you add helpers, `edit_file` the real call sites (registration tables, loaders, CLI parsers) in the same turn.
 6. When the user names APIs, builtins, or flags (for example `require_cache_info()`, `BeginRepl`, `--module-debug`), those strings must appear in the working tree as wired behavior — not only as unused helpers.
-7. After edits, discover and run the repo's real checks via `bash` until they pass: for Python prefer `pytest` / `python -m pytest` on the tests you touched (`compileall` alone is not enough); for Rust prefer `cargo check` / focused `cargo test`; for Go prefer `go test` / `go build` on touched packages; for CPython C extensions prefer `make -j2` / targeted `.o` rebuilds.
+7. After edits, discover and run the repo's real checks via `bash` until they pass: for Python prefer `pytest` / `python -m pytest` on the tests you touched (`compileall` alone is not enough); for Rust prefer `cargo check` / focused `cargo test`; for Go prefer targeted `go test` on touched packages (`go build` alone does not run tests — do not leave build binaries like `./main` in the repo); for CPython C extensions prefer `make -j2` / targeted `.o` rebuilds.
 8. If the user names a deliverable command or artifact (for example `lolbench-submit`, a patch path), run it / produce it before finishing.
 9. Never treat "I understand the approach" as task completion when code changes were requested and no files were modified.
 """
@@ -80,7 +80,7 @@ CODE_EXECUTION_POLICY_CN = """\
 4. 不要停在仅改类型签名/文档（例如只改字段类型）；补齐 parser、校验、call site 与 apply/resolve 等行为所需逻辑。
 5. 优先改现有入口，而不是写一个从未注册/调用的平行模块；若新增 helper，同一轮要用 `edit_file` 改真正的 call site（注册表、loader、CLI 解析）。
 6. 当用户点名了 API、builtin 或 flag（例如 `require_cache_info()`、`BeginRepl`、`--module-debug`），这些字符串必须作为已接入行为出现在工作区，而不是未使用的 helper。
-7. 改完后用 `bash` 发现并跑仓库真正的检查直到通过：Python 优先对相关测试跑 `pytest` / `python -m pytest`（仅 `compileall` 不够）；Rust 优先 `cargo check` / 聚焦 `cargo test`；Go 优先对改动包跑 `go test` / `go build`；CPython C 扩展优先 `make -j2` / 重建相关 `.o`。
+7. 改完后用 `bash` 发现并跑仓库真正的检查直到通过：Python 优先对相关测试跑 `pytest` / `python -m pytest`（仅 `compileall` 不够）；Rust 优先 `cargo check` / 聚焦 `cargo test`；Go 优先对改动包跑 `go test`（仅 `go build` 不会跑测试，不要把 `./main` 等编译产物留在仓库）；CPython C 扩展优先 `make -j2` / 重建相关 `.o`。
 8. 若用户指定了交付命令或产物（例如 `lolbench-submit`、patch 路径），结束前必须执行/生成。
 9. 在已要求改代码却尚未修改任何文件时，不要把「已理解方案」当成任务完成。
 """

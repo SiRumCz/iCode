@@ -15,10 +15,12 @@ from openjiuwen_icode.features.implement_gate import (
     edit_args_look_shallow,
     extract_bash_command,
     extract_bash_command_from_result,
+    looks_like_go_suite_command,
     looks_like_native_build_command,
     looks_like_python_suite_command,
     looks_like_submit_command,
     looks_like_verify_command,
+    mutation_args_touch_go,
     mutation_args_touch_native,
     mutation_args_touch_python,
     mutation_text_from_args,
@@ -113,6 +115,21 @@ _PYTHON_SUITE_CN = (
     "发现并运行相关测试（`pytest` 或 `python -m pytest`），修失败用例直到通过。"
 )
 
+_GO_SUITE_EN = (
+    "## Go tests required\n"
+    "You edited `.go` files. `go build` / `go vet` do not run tests — "
+    "call `bash` with targeted `go test` on the packages you touched "
+    "(for example `go test ./evaluator -count=1`), fix failures, and "
+    "re-run until they pass. Do not leave build output binaries in the repo."
+)
+
+_GO_SUITE_CN = (
+    "## 需要跑 Go 测试\n"
+    "你修改了 `.go` 文件。`go build` / `go vet` 不会跑测试——请用 `bash` "
+    "对改动包执行 `go test`（例如 `go test ./evaluator -count=1`），"
+    "修失败用例直到通过。不要把编译产物二进制留在仓库里。"
+)
+
 _VERIFY_EN = (
     "## Verify reminder\n"
     "You already modified files. Before finishing, run a compile or "
@@ -156,6 +173,8 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._native_build_verified = False
         self._python_mutated = False
         self._python_suite_verified = False
+        self._go_mutated = False
+        self._go_suite_verified = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -175,6 +194,8 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._native_build_verified = False
         self._python_mutated = False
         self._python_suite_verified = False
+        self._go_mutated = False
+        self._go_suite_verified = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -198,6 +219,9 @@ class ImplementCompletenessRail(DeepAgentRail):
             if mutation_args_touch_python(args):
                 self._python_mutated = True
                 self._python_suite_verified = False
+            if mutation_args_touch_go(args):
+                self._go_mutated = True
+                self._go_suite_verified = False
             if tool_is_edit_existing(name):
                 self._integration_attempted = True
             # Keep blob tracking available for future rail use.
@@ -226,10 +250,13 @@ class ImplementCompletenessRail(DeepAgentRail):
                             self._native_build_verified = True
                         if looks_like_python_suite_command(result_cmd):
                             self._python_suite_verified = True
+                        if looks_like_go_suite_command(result_cmd):
+                            self._go_suite_verified = True
                         if verify_command_qualifies_for_completion(
                             result_cmd,
                             native_mutated=self._native_mutated,
                             python_mutated=self._python_mutated,
+                            go_mutated=self._go_mutated,
                             success=True,
                             user_text=self._user_text,
                         ):
@@ -262,6 +289,11 @@ class ImplementCompletenessRail(DeepAgentRail):
                 or self._native_mutated
                 or self._python_suite_verified
             )
+            and (
+                not self._go_mutated
+                or self._native_mutated
+                or self._go_suite_verified
+            )
         ):
             return
 
@@ -282,6 +314,17 @@ class ImplementCompletenessRail(DeepAgentRail):
             content = {
                 "en": _NATIVE_BUILD_EN,
                 "cn": _NATIVE_BUILD_CN,
+                lang: text,
+            }
+        elif (
+            self._go_mutated
+            and not self._native_mutated
+            and not self._go_suite_verified
+        ):
+            text = _GO_SUITE_CN if zh else _GO_SUITE_EN
+            content = {
+                "en": _GO_SUITE_EN,
+                "cn": _GO_SUITE_CN,
                 lang: text,
             }
         elif (

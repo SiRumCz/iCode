@@ -183,6 +183,72 @@ def test_python_suite_required_for_pure_python_edits() -> None:
     )
 
 
+def test_go_suite_required_for_pure_go_edits() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        GO_SUITE_NUDGE,
+        is_go_source_path,
+        looks_like_go_suite_command,
+        mutation_args_touch_go,
+    )
+
+    assert is_go_source_path("evaluator/evaluator.go")
+    assert is_go_source_path("evaluator/evaluator_test.go")
+    assert mutation_args_touch_go(
+        {"file_path": "parser/parser.go", "content": "package parser\n"}
+    )
+    assert looks_like_go_suite_command("go test ./evaluator ./parser -count=1")
+    assert looks_like_go_suite_command("go test ./...")
+    assert not looks_like_go_suite_command("go build ./...")
+    assert not looks_like_go_suite_command("go vet ./...")
+
+    assert (
+        verify_command_qualifies_for_completion(
+            "go build ./...",
+            native_mutated=False,
+            go_mutated=True,
+            success=True,
+        )
+        is False
+    )
+    assert (
+        verify_command_qualifies_for_completion(
+            "go test ./evaluator -count=1",
+            native_mutated=False,
+            go_mutated=True,
+            success=True,
+        )
+        is True
+    )
+
+    text = "Implement stepped slice indexing in the ABS evaluator."
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=False,
+            go_mutated=True,
+            go_suite_verified=False,
+        )
+        == GO_SUITE_NUDGE
+    )
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
+            submit_attempted=False,
+            shallow_only=False,
+            go_mutated=True,
+            go_suite_verified=True,
+        )
+        is None
+    )
+
+
 def test_native_build_nudge_before_submit() -> None:
     text = "Implement PEP 696 then run lolbench-submit"
     assert (

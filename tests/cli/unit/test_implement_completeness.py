@@ -347,6 +347,77 @@ async def test_native_build_clears_nudge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_go_edit_requires_go_test_before_clearing_nudge() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={
+                    "file_path": "evaluator/evaluator.go",
+                    "old_string": "old",
+                    "new_string": "func evalStepped() {}\n",
+                },
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "go build ./..."},
+                tool_result=SimpleNamespace(
+                    success=True,
+                    data="Command: go build ./...\nExit Code: 0",
+                ),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" in builder.sections
+
+
+@pytest.mark.asyncio
+async def test_go_test_clears_nudge() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={
+                    "file_path": "evaluator/evaluator.go",
+                    "old_string": "old",
+                    "new_string": "func evalStepped() {}\n",
+                },
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "go test ./evaluator -count=1"},
+                tool_result=SimpleNamespace(
+                    success=True,
+                    data=(
+                        "Command: go test ./evaluator -count=1\n"
+                        "Exit Code: 0"
+                    ),
+                ),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" not in builder.sections
+
+
+@pytest.mark.asyncio
 async def test_real_edit_without_verify_still_nudges() -> None:
     rail = ImplementCompletenessRail()
     builder = _FakeBuilder()

@@ -282,11 +282,13 @@ class SessionHost:
         native_build_verified = False
         python_mutated = False
         python_suite_verified = False
+        go_mutated = False
+        go_suite_verified = False
         mutation_blob_parts: list[str] = []
         continuation_attempts = 0
         # Allow zero-mutation → shallow → integration → symbols → native →
-        # python-suite → verify → verify-failed → submit chain.
-        max_continuations = 9 if self._auto_approve else 0
+        # go-suite → python-suite → verify → verify-failed → submit chain.
+        max_continuations = 10 if self._auto_approve else 0
         if self._mutations is not None and sid:
             self._mutations.begin_turn(sid)
         try:
@@ -296,10 +298,12 @@ class SessionHost:
                 extract_bash_command,
                 extract_bash_command_from_result,
                 looks_like_native_build_command,
+                looks_like_go_suite_command,
                 looks_like_python_suite_command,
                 looks_like_submit_command,
                 looks_like_verify_command,
                 missing_prompt_symbols,
+                mutation_args_touch_go,
                 mutation_args_touch_native,
                 mutation_args_touch_python,
                 mutation_text_from_args,
@@ -330,6 +334,8 @@ class SessionHost:
                     native_build_verified=native_build_verified,
                     python_mutated=python_mutated,
                     python_suite_verified=python_suite_verified,
+                    go_mutated=go_mutated,
+                    go_suite_verified=go_suite_verified,
                 )
 
             await self._bus.publish(
@@ -368,6 +374,9 @@ class SessionHost:
                                     ):
                                         python_mutated = True
                                         python_suite_verified = False
+                                    if mutation_args_touch_go(ev.tool_args):
+                                        go_mutated = True
+                                        go_suite_verified = False
                                     if tool_is_edit_existing(ev.tool_name):
                                         integration_attempted = True
                                     chunk_text = mutation_text_from_args(
@@ -411,10 +420,13 @@ class SessionHost:
                                                 cmd
                                             ):
                                                 python_suite_verified = True
+                                            if looks_like_go_suite_command(cmd):
+                                                go_suite_verified = True
                                             if verify_command_qualifies_for_completion(
                                                 cmd,
                                                 native_mutated=native_mutated,
                                                 python_mutated=python_mutated,
+                                                go_mutated=go_mutated,
                                                 success=True,
                                                 user_text=event.text,
                                             ):
