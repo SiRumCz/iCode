@@ -547,6 +547,8 @@ def verify_command_qualifies_for_completion(
     if go_mutated and not native_mutated:
         if not looks_like_go_suite_command(command):
             return False
+        if user_text and not go_command_matches_task_scope(user_text, command):
+            return False
     return True
 
 
@@ -749,6 +751,30 @@ def _keyword_in_command(keyword: str, command_lower: str) -> bool:
     if f"{keyword}s" in command_lower:
         return True
     return False
+
+
+def go_command_matches_task_scope(user_text: str, command: str) -> bool:
+    """Return True when a targeted ``go test`` run matches the task's feature area.
+
+    When the prompt names a distinctive feature area, ``go test`` must mention
+    at least one repeated keyword in the command path or ``-run`` expression.
+    Bare ``go test ./...`` against an unchanged base checkout is not enough —
+    it can pass while new fail-to-pass tests (added only at grading time) still
+    fail.
+    """
+    if not user_text or not command or not looks_like_go_suite_command(command):
+        return True
+    stem_keywords = _shared_api_stems(user_text)
+    repeated_keywords = _repeated_task_keywords(user_text)
+    keywords = stem_keywords | repeated_keywords
+    if not keywords:
+        return True
+    lower = str(command).lower()
+    match = re.search(r"\b-run(?:=|\s+)(['\"]?)([\w.-]+)\1", lower)
+    if match:
+        expr = match.group(2)
+        return any(_keyword_in_command(kw, expr) for kw in keywords)
+    return any(_keyword_in_command(kw, lower) for kw in keywords)
 
 
 def pytest_command_matches_task_scope(user_text: str, command: str) -> bool:
@@ -964,6 +990,45 @@ def looks_like_git_archaeology(command: str) -> bool:
     return any(tok in lower for tok in archaeology)
 
 
+def looks_like_explore_bash(command: str) -> bool:
+    """Return True when *command* is read-only inspection via ``bash``.
+
+    These commands burn explore budget on implement tasks: agents often loop on
+    ``go test ./...``, ``grep``, or ``cat`` without ever calling edit tools.
+    """
+    if not command or not str(command).strip():
+        return False
+    if looks_like_git_archaeology(command):
+        return True
+    lower = str(command).lower()
+    explore = (
+        "go test",
+        "go build",
+        "go vet",
+        "go list",
+        "go doc",
+        "grep ",
+        "grep\t",
+        "rg ",
+        "rg\t",
+        "find ",
+        "cat ",
+        "head ",
+        "tail ",
+        "less ",
+        "wc ",
+        "ls ",
+        "tree ",
+        "fd ",
+        "ag ",
+    )
+    if any(tok in lower for tok in explore):
+        return True
+    if re.search(r"(?:\./)?python(?:3(?:\.\d+)?)?\s+-c\b", lower):
+        return True
+    return False
+
+
 __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
     "GO_SUITE_NUDGE",
@@ -987,6 +1052,8 @@ __all__ = [
     "is_native_source_path",
     "is_python_source_path",
     "is_shallow_signature_edit",
+    "go_command_matches_task_scope",
+    "looks_like_explore_bash",
     "looks_like_git_archaeology",
     "looks_like_go_suite_command",
     "looks_like_implement_task",

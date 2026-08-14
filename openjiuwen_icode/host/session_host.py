@@ -427,13 +427,20 @@ class SessionHost:
                                                 python_suite_verified = True
                                             if looks_like_go_suite_command(cmd):
                                                 go_suite_verified = True
-                                            if verify_command_qualifies_for_completion(
-                                                cmd,
-                                                native_mutated=native_mutated,
-                                                python_mutated=python_mutated,
-                                                go_mutated=go_mutated,
-                                                success=True,
-                                                user_text=event.text,
+                                            workspace_ok = (
+                                                self._mutations is None
+                                                or self._mutations.has_workspace_changes()
+                                            )
+                                            if (
+                                                workspace_ok
+                                                and verify_command_qualifies_for_completion(
+                                                    cmd,
+                                                    native_mutated=native_mutated,
+                                                    python_mutated=python_mutated,
+                                                    go_mutated=go_mutated,
+                                                    success=True,
+                                                    user_text=event.text,
+                                                )
                                             ):
                                                 verify_succeeded = True
                                             else:

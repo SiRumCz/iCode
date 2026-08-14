@@ -348,6 +348,70 @@ def test_looks_like_git_archaeology() -> None:
     assert not looks_like_git_archaeology("git status")
 
 
+def test_looks_like_explore_bash() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        looks_like_explore_bash,
+    )
+
+    assert looks_like_explore_bash("go test ./... -count=1")
+    assert looks_like_explore_bash("go build ./...")
+    assert looks_like_explore_bash("grep -R 'default' parser/")
+    assert looks_like_explore_bash("cat vm/vm.go | head")
+    assert not looks_like_explore_bash("cargo check -p ruff")
+    assert not looks_like_explore_bash("git status")
+
+
+def test_go_command_matches_task_scope() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        go_command_matches_task_scope,
+    )
+
+    task = (
+        "Add support for default argument values written as `name = expression`. "
+        "When a call omits trailing arguments, assign default values. "
+        "Invalid declarations should use `invalid default argument declaration`."
+    )
+    assert not go_command_matches_task_scope(task, "go test ./... -count=1")
+    assert go_command_matches_task_scope(
+        task, "go test ./vm -run TestDefaultArguments -count=1"
+    )
+    assert go_command_matches_task_scope(
+        task, "go test -run DefaultArgument -count=1 ./..."
+    )
+
+
+def test_go_verify_requires_task_scoped_go_test() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        go_command_matches_task_scope,
+    )
+
+    task = (
+        "Add default argument values. Default default default arguments "
+        "arguments arguments arguments."
+    )
+    assert not go_command_matches_task_scope(task, "go test ./...")
+    assert (
+        verify_command_qualifies_for_completion(
+            "go test ./...",
+            native_mutated=False,
+            go_mutated=True,
+            success=True,
+            user_text=task,
+        )
+        is False
+    )
+    assert (
+        verify_command_qualifies_for_completion(
+            "go test ./vm -run Default -count=1",
+            native_mutated=False,
+            go_mutated=True,
+            success=True,
+            user_text=task,
+        )
+        is True
+    )
+
+
 def test_next_implement_continuation_chain() -> None:
     text = "Implement --config overrides then run lolbench-submit"
     assert (

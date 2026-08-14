@@ -12,7 +12,7 @@ from openjiuwen.harness.rails.base import DeepAgentRail
 
 from openjiuwen_icode.features.implement_gate import (
     extract_bash_command,
-    looks_like_git_archaeology,
+    looks_like_explore_bash,
 )
 from openjiuwen_icode.features.mutations import MUTATING_TOOLS
 
@@ -83,11 +83,11 @@ class CodeEditNudgeRail(DeepAgentRail):
         if name in _EXPLORE_TOOLS:
             self._explore_count += 1
             return
-        # Historical git searches burn the explore budget too — common
-        # failure mode on pruned LoLBench base checkouts.
+        # Read-only bash (git archaeology, go test/build, grep/cat) burns the
+        # explore budget too — common failure mode on pruned eval checkouts.
         if name == "bash":
             cmd = extract_bash_command(getattr(inputs, "tool_args", None))
-            if looks_like_git_archaeology(cmd):
+            if looks_like_explore_bash(cmd):
                 self._explore_count += 1
 
     async def before_model_call(self, ctx: AgentCallbackContext) -> None:
