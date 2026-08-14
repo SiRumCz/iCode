@@ -30,6 +30,32 @@ from openjiuwen_icode.features.mutations import MUTATING_TOOLS
 _SECTION = "implement_completeness"
 _PRIORITY = 97
 
+
+def _user_text_from_ctx(ctx: Any) -> str:
+    """Best-effort extract of the latest user task text from callback ctx."""
+    messages = getattr(getattr(ctx, "inputs", None), "messages", None) or []
+    for msg in reversed(list(messages)):
+        role = getattr(msg, "role", None)
+        if role is None and isinstance(msg, dict):
+            role = msg.get("role")
+        if role != "user":
+            continue
+        content = getattr(msg, "content", None)
+        if content is None and isinstance(msg, dict):
+            content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+        if isinstance(content, list):
+            texts = [
+                p.get("text", "")
+                for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
+            joined = " ".join(t for t in texts if t).strip()
+            if joined:
+                return joined
+    return ""
+
 _SHALLOW_EN = (
     "## Incomplete edit reminder\n"
     "Recent edits look signature/docs-only (type swaps without parsers, "
@@ -133,6 +159,7 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
+        self._user_text = ""
         self.system_prompt_builder = None
         self._agent: Any = None
 
@@ -151,8 +178,11 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
+        self._user_text = ""
 
     async def after_tool_call(self, ctx: AgentCallbackContext) -> None:
+        if not self._user_text:
+            self._user_text = _user_text_from_ctx(ctx)
         inputs = ctx.inputs
         name = str(getattr(inputs, "tool_name", "") or "")
         args = getattr(inputs, "tool_args", None)
@@ -201,6 +231,7 @@ class ImplementCompletenessRail(DeepAgentRail):
                             native_mutated=self._native_mutated,
                             python_mutated=self._python_mutated,
                             success=True,
+                            user_text=self._user_text,
                         ):
                             self._verify_succeeded = True
                         else:
@@ -210,6 +241,8 @@ class ImplementCompletenessRail(DeepAgentRail):
             return
 
     async def before_model_call(self, ctx: AgentCallbackContext) -> None:
+        if not self._user_text:
+            self._user_text = _user_text_from_ctx(ctx)
         builder = self.system_prompt_builder
         if builder is None:
             return

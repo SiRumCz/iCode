@@ -15,6 +15,7 @@ from openjiuwen_icode.features.implement_gate import (
     edit_args_look_shallow,
     extract_bash_command,
     extract_bash_command_from_result,
+    extract_required_prompt_symbols,
     is_native_source_path,
     is_shallow_signature_edit,
     looks_like_implement_task,
@@ -463,3 +464,68 @@ def test_mutation_text_and_edit_tool_helpers() -> None:
     )
     assert "require_cache_info" in blob
     assert "functions.go" in blob
+
+
+def test_snapshot_task_symbol_extraction_and_missing() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        missing_prompt_symbols,
+        pytest_command_matches_task_scope,
+    )
+
+    task = (
+        "Add snapshots to Monitor. Monitor/start_monitor accept max_snapshots. "
+        "Monitor methods: capture_snapshot, list_snapshots (returns summaries "
+        "with id, name, running_count, and terminated_count), get_snapshot, "
+        "format_snapshot_diff(snapshot_id_1, snapshot_id_2). "
+        "Web API returns {id} and {added, removed, common}."
+    )
+    symbols = extract_required_prompt_symbols(task)
+    assert "capture_snapshot" in symbols
+    assert "start_monitor" in symbols
+    assert "max_snapshots" in symbols
+    assert "format_snapshot_diff" in symbols
+    assert "id" in symbols
+    assert "running_count" in symbols
+
+    patch_blob = (
+        "def capture_snapshot(self): ... snapshot_id: int running_count "
+        "terminated_count format_snapshot_diff"
+    )
+    missing = missing_prompt_symbols(user_text=task, mutation_blob=patch_blob)
+    assert "start_monitor" in missing
+    assert "id" in missing
+
+    assert pytest_command_matches_task_scope(task, "pytest -q")
+    assert not pytest_command_matches_task_scope(
+        task, "pytest -q tests/test_monitor.py"
+    )
+    assert pytest_command_matches_task_scope(
+        task, "pytest -q tests/test_snapshot.py"
+    )
+
+
+def test_python_verify_requires_task_scoped_pytest() -> None:
+    task = (
+        "Add snapshot support with capture_snapshot and format_snapshot_diff. "
+        "Snapshots snapshots snapshots."
+    )
+    assert (
+        verify_command_qualifies_for_completion(
+            "pytest -q tests/test_monitor.py",
+            native_mutated=False,
+            python_mutated=True,
+            success=True,
+            user_text=task,
+        )
+        is False
+    )
+    assert (
+        verify_command_qualifies_for_completion(
+            "pytest -q tests/test_snapshot.py",
+            native_mutated=False,
+            python_mutated=True,
+            success=True,
+            user_text=task,
+        )
+        is True
+    )

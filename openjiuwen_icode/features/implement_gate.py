@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from typing import Any
 
 _IMPLEMENT_HINTS = (
@@ -485,6 +486,7 @@ def verify_command_qualifies_for_completion(
     native_mutated: bool,
     success: bool,
     python_mutated: bool = False,
+    user_text: str = "",
 ) -> bool:
     """Return True when a successful verify command completes the verify gate."""
     if not success or not looks_like_verify_command(command):
@@ -494,6 +496,8 @@ def verify_command_qualifies_for_completion(
     # Pure-Python edits: require a real suite, not compileall / python -c.
     if python_mutated and not native_mutated:
         if not looks_like_python_suite_command(command):
+            return False
+        if user_text and not pytest_command_matches_task_scope(user_text, command):
             return False
     return True
 
@@ -621,9 +625,11 @@ def _normalize_symbol_token(raw: str) -> str:
     return tok
 
 
-def _is_strong_symbol(tok: str) -> bool:
+def _is_strong_symbol(tok: str, *, allow_short: bool = False) -> bool:
     """Keep API-like tokens; drop prose / short field names."""
-    if not tok or len(tok) < 4:
+    if not tok:
+        return False
+    if len(tok) < 4 and not (allow_short and len(tok) >= 2):
         return False
     lower = tok.lower()
     if lower in _SYMBOL_STOPWORDS:
@@ -631,6 +637,8 @@ def _is_strong_symbol(tok: str) -> bool:
     if "/" in tok or " " in tok:
         return False
     if tok.startswith("--") and len(tok) >= 5:
+        return True
+    if allow_short and re.match(r"^[a-z][a-z0-9_]*$", lower) and len(tok) >= 2:
         return True
     # ABS_MODULE_PATH / require_cache_info
     if "_" in tok and len(tok) >= 6:
@@ -643,22 +651,99 @@ def _is_strong_symbol(tok: str) -> bool:
     return False
 
 
+def _symbol_present_in_blob(sym: str, blob: str) -> bool:
+    """Return True when *sym* appears in *blob* as a whole token when short."""
+    if len(sym) <= 3:
+        return bool(re.search(rf"\b{re.escape(sym)}\b", blob))
+    if sym in blob:
+        return True
+    return sym.lower() in blob.lower()
+
+
+def _repeated_task_keywords(
+    text: str,
+    *,
+    min_count: int = 3,
+    min_len: int = 5,
+) -> frozenset[str]:
+    """Distinctive lowercase keywords repeated in an implement-style prompt."""
+    words = re.findall(rf"\b[a-z][a-z0-9_]{{{min_len - 1},}}\b", text.lower())
+    counts = Counter(
+        w for w in words if w not in _SYMBOL_STOPWORDS and not w.isdigit()
+    )
+    return frozenset(w for w, n in counts.items() if n >= min_count)
+
+
+def _shared_api_stems(text: str, *, min_count: int = 2, min_len: int = 5) -> frozenset[str]:
+    """Parts shared across multiple snake_case APIs named in the task."""
+    apis = re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", text.lower())
+    part_counts: Counter[str] = Counter()
+    for api in apis:
+        seen_in_api: set[str] = set()
+        for part in api.split("_"):
+            if len(part) < min_len:
+                continue
+            stem = part.rstrip("s")
+            if stem not in seen_in_api:
+                seen_in_api.add(stem)
+                part_counts[stem] += 1
+                if stem != part:
+                    part_counts[part] += 1
+    return frozenset(p for p, n in part_counts.items() if n >= min_count)
+
+
+def _keyword_in_command(keyword: str, command_lower: str) -> bool:
+    """Match task keywords against pytest paths (snapshot ↔ snapshots)."""
+    if keyword in command_lower:
+        return True
+    if keyword.endswith("s") and keyword[:-1] in command_lower:
+        return True
+    if f"{keyword}s" in command_lower:
+        return True
+    return False
+
+
+def pytest_command_matches_task_scope(user_text: str, command: str) -> bool:
+    """Return True when a targeted pytest run matches the task's feature area.
+
+    Broad invocations like ``pytest -q`` are accepted. Narrow runs against a
+    single ``tests/test_*.py`` module must mention a repeated task keyword
+    (for example ``snapshot`` on snapshot tasks), so passing unrelated legacy
+    tests does not satisfy the Python verify gate.
+    """
+    if not user_text or not command or not looks_like_python_suite_command(command):
+        return True
+    keywords = _shared_api_stems(user_text)
+    if not keywords:
+        keywords = _repeated_task_keywords(user_text)
+    if not keywords:
+        return True
+    lower = str(command).lower()
+    if re.search(r"tests/test_[\w.-]+\.py", lower):
+        return any(_keyword_in_command(kw, lower) for kw in keywords)
+    match = re.search(r"\b-k(?:=|\s+)(['\"]?)([\w.-]+)\1", lower)
+    if match:
+        expr = match.group(2)
+        return any(_keyword_in_command(kw, expr) for kw in keywords)
+    return True
+
+
 def extract_required_prompt_symbols(text: str) -> tuple[str, ...]:
     """Pull API / flag names the user likely expects to appear in the patch."""
     if not text or not str(text).strip():
         return ()
     found: list[str] = []
 
-    def _add(token: str) -> None:
+    def _add(token: str, *, allow_short: bool = False) -> None:
         tok = _normalize_symbol_token(token)
-        if not _is_strong_symbol(tok):
+        if not _is_strong_symbol(tok, allow_short=allow_short):
             return
         if tok not in found:
             found.append(tok)
         if "." in tok:
             leaf = tok.rsplit(".", 1)[-1]
             if leaf != tok:
-                _add(leaf)
+                _add(leaf, allow_short=allow_short)
 
     for m in re.finditer(r"`([^`]+)`", text):
         _add(m.group(1))
@@ -669,9 +754,58 @@ def extract_required_prompt_symbols(text: str) -> tuple[str, ...]:
     # CamelCase entrypoints (BeginRepl) not already captured.
     for m in re.finditer(r"\b([A-Z][a-zA-Z0-9]{5,})\b", text):
         _add(m.group(1))
+    # snake_case APIs common in Python tasks (capture_snapshot, max_snapshots).
+    for m in re.finditer(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b", text):
+        _add(m.group(1))
+    # Explicit field/member lists: "with id, name, running_count, and terminated_count".
+    for m in re.finditer(
+        r"(?:with|fields?|attributes?|members?|keys?)\s+"
+        r"([a-z][a-z0-9_]*(?:\s*,\s*(?:and\s+)?[a-z][a-z0-9_]*)+)",
+        text,
+        re.IGNORECASE,
+    ):
+        for part in re.split(r"\s*,\s*|\s+and\s+", m.group(1)):
+            _add(part.strip(), allow_short=True)
+    # JSON-ish response keys: returns {id}, {added, removed, common}.
+    for m in re.finditer(r"\{([^{}]+)\}", text):
+        for part in m.group(1).split(","):
+            _add(part.strip(), allow_short=True)
 
     # Cap so a long instruction cannot demand dozens of tokens.
-    return tuple(found[:16])
+    return tuple(found[:24])
+
+
+def _extract_wiring_symbols(text: str) -> tuple[str, ...]:
+    """Entrypoints explicitly wired via slash syntax (Monitor/start_monitor)."""
+    found: list[str] = []
+    for m in re.finditer(r"/([a-z][a-z0-9_]+)\b", text.lower()):
+        tok = _normalize_symbol_token(m.group(1))
+        if _is_strong_symbol(tok) and tok not in found:
+            found.append(tok)
+    return tuple(found)
+
+
+def _extract_spec_field_names(text: str) -> tuple[str, ...]:
+    """Short field names from explicit spec lists and JSON response shapes."""
+    found: list[str] = []
+
+    def _add_field(token: str) -> None:
+        tok = _normalize_symbol_token(token)
+        if _is_strong_symbol(tok, allow_short=True) and tok not in found:
+            found.append(tok)
+
+    for m in re.finditer(
+        r"(?:with|fields?|attributes?|members?|keys?)\s+"
+        r"([a-z][a-z0-9_]*(?:\s*,\s*(?:and\s+)?[a-z][a-z0-9_]*)+)",
+        text,
+        re.IGNORECASE,
+    ):
+        for part in re.split(r"\s*,\s*|\s+and\s+", m.group(1)):
+            _add_field(part.strip())
+    for m in re.finditer(r"\{([^{}]+)\}", text):
+        for part in m.group(1).split(","):
+            _add_field(part.strip())
+    return tuple(found)
 
 
 def missing_prompt_symbols(
@@ -687,14 +821,21 @@ def missing_prompt_symbols(
     only reports missing ones when coverage is below *coverage_ratio*.
     """
     required = extract_required_prompt_symbols(user_text)
-    if len(required) < min_required:
+    must_have = tuple(
+        dict.fromkeys(
+            (*_extract_wiring_symbols(user_text), *_extract_spec_field_names(user_text))
+        )
+    )
+    if len(required) < min_required and not must_have:
         return ()
     blob = mutation_blob or ""
-    blob_lower = blob.lower()
+    must_missing = tuple(
+        sym for sym in must_have if not _symbol_present_in_blob(sym, blob)
+    )
+    if must_missing:
+        return must_missing[:8]
     missing = tuple(
-        sym
-        for sym in required
-        if sym not in blob and sym.lower() not in blob_lower
+        sym for sym in required if not _symbol_present_in_blob(sym, blob)
     )
     covered = len(required) - len(missing)
     if covered / max(len(required), 1) >= coverage_ratio:
@@ -798,6 +939,7 @@ __all__ = [
     "mutation_text_from_args",
     "next_implement_continuation",
     "prompt_symbol_nudge",
+    "pytest_command_matches_task_scope",
     "task_requires_submit",
     "tool_is_edit_existing",
     "tool_is_write_file",

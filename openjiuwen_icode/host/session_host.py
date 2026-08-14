@@ -416,6 +416,7 @@ class SessionHost:
                                                 native_mutated=native_mutated,
                                                 python_mutated=python_mutated,
                                                 success=True,
+                                                user_text=event.text,
                                             ):
                                                 verify_succeeded = True
                                             else:
