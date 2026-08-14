@@ -15,10 +15,13 @@ from openjiuwen_icode.features.implement_gate import (
     edit_args_look_shallow,
     extract_bash_command,
     extract_bash_command_from_result,
+    looks_like_native_build_command,
     looks_like_submit_command,
     looks_like_verify_command,
+    mutation_args_touch_native,
     mutation_text_from_args,
     tool_is_edit_existing,
+    verify_command_qualifies_for_completion,
 )
 from openjiuwen_icode.features.mutations import MUTATING_TOOLS
 
@@ -55,12 +58,26 @@ _INTEGRATION_CN = (
     "CLI 解析），再用 `bash` 验证。"
 )
 
+_NATIVE_BUILD_EN = (
+    "## Native build required\n"
+    "You edited native/C extension sources (.c/.h). Python-only tests do not "
+    "rebuild those objects. Run `make -j2` or rebuild touched `.o` files via "
+    "`bash` and fix compile errors before submit."
+)
+
+_NATIVE_BUILD_CN = (
+    "## 需要原生编译\n"
+    "你修改了 native/C 扩展源码（.c/.h）。仅跑 Python 测试不会重新编译这些"
+    "对象。请用 `bash` 执行 `make -j2` 或重建相关 `.o`，修复编译错误后再提交。"
+)
+
 _VERIFY_EN = (
     "## Verify reminder\n"
     "You already modified files. Before finishing, run a compile or "
     "targeted test via `bash` (Rust: `cargo check`; Go: `go test` / "
-    "`go build`). Fix failures. If the user named a submit command "
-    "(e.g. `lolbench-submit`), run it only after verification succeeds."
+    "`go build`; CPython/C: `make -j2`). Fix failures. If the user named "
+    "a submit command (e.g. `lolbench-submit`), run it only after "
+    "verification succeeds."
 )
 
 _VERIFY_FAILED_EN = (
@@ -72,7 +89,8 @@ _VERIFY_FAILED_EN = (
 _VERIFY_CN = (
     "## 验证提醒\n"
     "你已修改文件。结束前请用 `bash` 跑编译或针对性测试"
-    "（Rust: `cargo check`；Go: `go test` / `go build`），并根据报错继续修。"
+    "（Rust: `cargo check`；Go: `go test` / `go build`；CPython/C: "
+    "`make -j2`），并根据报错继续修。"
     "若用户要求提交命令（例如 `lolbench-submit`），验证通过后再执行。"
 )
 
@@ -92,6 +110,8 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._mutated = False
         self._shallow_only = True
         self._integration_attempted = False
+        self._native_mutated = False
+        self._native_build_verified = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -106,6 +126,8 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._mutated = False
         self._shallow_only = True
         self._integration_attempted = False
+        self._native_mutated = False
+        self._native_build_verified = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -120,6 +142,9 @@ class ImplementCompletenessRail(DeepAgentRail):
         if name in MUTATING_TOOLS:
             self._mutated = True
             self._verify_succeeded = False
+            if mutation_args_touch_native(args):
+                self._native_mutated = True
+                self._native_build_verified = False
             if tool_is_edit_existing(name):
                 self._integration_attempted = True
             # Keep blob tracking available for future rail use.
@@ -144,7 +169,16 @@ class ImplementCompletenessRail(DeepAgentRail):
                         tool_success=getattr(tool_result, "success", None),
                     )
                     if ok is True:
-                        self._verify_succeeded = True
+                        if looks_like_native_build_command(result_cmd):
+                            self._native_build_verified = True
+                        if verify_command_qualifies_for_completion(
+                            result_cmd,
+                            native_mutated=self._native_mutated,
+                            success=True,
+                        ):
+                            self._verify_succeeded = True
+                        else:
+                            self._verify_succeeded = False
                     elif ok is False:
                         self._verify_succeeded = False
             return
@@ -163,6 +197,7 @@ class ImplementCompletenessRail(DeepAgentRail):
             self._verify_succeeded
             and not self._shallow_only
             and self._integration_attempted
+            and (not self._native_mutated or self._native_build_verified)
         ):
             return
 
@@ -176,6 +211,13 @@ class ImplementCompletenessRail(DeepAgentRail):
             content = {
                 "en": _INTEGRATION_EN,
                 "cn": _INTEGRATION_CN,
+                lang: text,
+            }
+        elif self._native_mutated and not self._native_build_verified:
+            text = _NATIVE_BUILD_CN if zh else _NATIVE_BUILD_EN
+            content = {
+                "en": _NATIVE_BUILD_EN,
+                "cn": _NATIVE_BUILD_CN,
                 lang: text,
             }
         elif self._verify_attempted and not self._verify_succeeded:

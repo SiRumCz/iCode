@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from openjiuwen_icode.features.implement_gate import (
+    NATIVE_BUILD_NUDGE,
     SHALLOW_EDIT_NUDGE,
     SUBMIT_NUDGE,
     VERIFY_FAILED_NUDGE,
@@ -14,12 +15,16 @@ from openjiuwen_icode.features.implement_gate import (
     edit_args_look_shallow,
     extract_bash_command,
     extract_bash_command_from_result,
+    is_native_source_path,
     is_shallow_signature_edit,
     looks_like_implement_task,
+    looks_like_native_build_command,
     looks_like_submit_command,
     looks_like_verify_command,
+    mutation_args_touch_native,
     next_implement_continuation,
     task_requires_submit,
+    verify_command_qualifies_for_completion,
 )
 
 
@@ -43,8 +48,14 @@ def test_verify_and_submit_command_detection() -> None:
     assert looks_like_verify_command("pytest -q")
     assert looks_like_verify_command("CCACHE_DISABLE=1 make -j2 python")
     assert looks_like_verify_command("make regen-pegen regen-ast")
+    assert looks_like_verify_command("make -j4 Objects/typevarobject.o")
     assert looks_like_verify_command("./python -c \"import ast; assert True\"")
     assert looks_like_verify_command("python -m pytest -q")
+    assert looks_like_verify_command("python3 -m compileall Lib/typing.py")
+    assert looks_like_native_build_command("make -j2")
+    assert looks_like_native_build_command("make -j4 Objects/typevarobject.o")
+    assert looks_like_native_build_command("cargo check -p foo")
+    assert not looks_like_native_build_command("./python -m test test_typing")
     assert not looks_like_verify_command("ls crates")
     assert looks_like_submit_command("lolbench-submit")
     assert looks_like_submit_command("cat /logs/artifacts/solution.patch")
@@ -52,6 +63,76 @@ def test_verify_and_submit_command_detection() -> None:
     assert extract_bash_command({"command": "cargo check"}) == "cargo check"
     assert task_requires_submit("run lolbench-submit when done")
     assert not task_requires_submit("implement the feature")
+
+
+def test_native_source_detection() -> None:
+    assert is_native_source_path("Objects/typevarobject.c")
+    assert is_native_source_path("/workspace/cpython/Include/foo.h")
+    assert not is_native_source_path("Lib/typing.py")
+    assert mutation_args_touch_native(
+        {
+            "file_path": "Objects/typevarobject.c",
+            "old_string": "x",
+            "new_string": "y",
+        }
+    )
+
+
+def test_native_build_required_for_completion() -> None:
+    assert (
+        verify_command_qualifies_for_completion(
+            "./python -m test test_typing",
+            native_mutated=True,
+            success=True,
+        )
+        is False
+    )
+    assert (
+        verify_command_qualifies_for_completion(
+            "make -j2 Objects/typevarobject.o",
+            native_mutated=True,
+            success=True,
+        )
+        is True
+    )
+    assert (
+        verify_command_qualifies_for_completion(
+            "./python -m test test_typing",
+            native_mutated=False,
+            success=True,
+        )
+        is True
+    )
+
+
+def test_native_build_nudge_before_submit() -> None:
+    text = "Implement PEP 696 then run lolbench-submit"
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
+            submit_attempted=False,
+            shallow_only=False,
+            native_mutated=True,
+            native_build_verified=False,
+        )
+        == NATIVE_BUILD_NUDGE
+    )
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
+            submit_attempted=False,
+            shallow_only=False,
+            native_mutated=True,
+            native_build_verified=True,
+        )
+        == SUBMIT_NUDGE
+    )
 
 
 def test_bash_result_success_detection() -> None:

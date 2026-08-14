@@ -49,6 +49,17 @@ _VERIFY_HINTS = (
     "mypy",
     "ruff check",
     "unittest",
+    "compileall",
+)
+
+_NATIVE_SOURCE_SUFFIXES = (
+    ".c",
+    ".h",
+    ".cpp",
+    ".cc",
+    ".cxx",
+    ".rs",
+    ".go",
 )
 
 _SUBMIT_HINTS = (
@@ -269,7 +280,8 @@ VERIFY_NUDGE = (
     "Call `bash` now to run a compile or targeted test command appropriate "
     "for this repo (for Rust: `cargo check` or a focused `cargo test`; "
     "for Go: `go test` / `go build` on the packages you touched; "
-    "for CPython: `make regen-pegen regen-ast` then "
+    "for CPython/C: `make -j2` or a targeted object rebuild; "
+    "for CPython grammar: `make regen-pegen regen-ast` then "
     "`CCACHE_DISABLE=1 make -j2 python`). "
     "Fix any errors that appear, then continue. If the user required a "
     "submit/deliver command (for example `lolbench-submit`), run it only "
@@ -277,11 +289,11 @@ VERIFY_NUDGE = (
 )
 
 VERIFY_FAILED_NUDGE = (
-    "Your last compile/test command failed (non-zero exit). "
-    "Read the errors, fix the code, and re-run verification via `bash` "
-    "until it succeeds. Do not run the submit/deliver command "
-    "(for example `lolbench-submit`) while the build or smoke test is still "
-    "failing."
+    "Your last compile/check command failed (non-zero exit). "
+    "Read the errors, fix the code, and run verification again via `bash` "
+    "(for C extensions: `make -j2` or rebuild the touched `.o`; for Rust: "
+    "`cargo check`; for Go: `go test` / `go build`). Do not run "
+    "submit/deliver until the build/check passes."
 )
 
 SUBMIT_NUDGE = (
@@ -290,6 +302,14 @@ SUBMIT_NUDGE = (
     "the user named (for example `lolbench-submit`) so "
     "`/logs/artifacts/solution.patch` (or the named artifact) exists. "
     "Do not finish without that step."
+)
+
+NATIVE_BUILD_NUDGE = (
+    "You edited native/C extension sources (.c/.h or similar). "
+    "Python-only tests or `compileall` do not rebuild those objects. "
+    "Run a native build via `bash` (`make -j2`, rebuild touched `.o` "
+    "files, or `cargo check` for Rust) and fix compile errors before "
+    "submit/deliver."
 )
 
 
@@ -332,8 +352,8 @@ def looks_like_verify_command(command: str) -> bool:
     lower = str(command).lower()
     if any(hint in lower for hint in _VERIFY_HINTS):
         return True
-    # CPython / autotools: interpreter rebuild smoke checks.
-    if "make" in lower and "python" in lower:
+    # CPython / autotools: make (interpreter or object rebuild).
+    if re.search(r"\bmake\b", lower):
         return True
     # CPython grammar/AST regeneration after editing python.gram / Python.asdl.
     if re.search(r"\bregen-(?:pegen|ast|token|keyword)\b", lower):
@@ -352,6 +372,63 @@ def looks_like_submit_command(command: str) -> bool:
         return False
     lower = str(command).lower()
     return any(hint in lower for hint in _SUBMIT_HINTS)
+
+
+def is_native_source_path(path: str) -> bool:
+    """Return True when *path* looks like a native/C/Rust source file."""
+    if not path or not str(path).strip():
+        return False
+    lower = str(path).lower().split("?", 1)[0]
+    return lower.endswith(_NATIVE_SOURCE_SUFFIXES)
+
+
+def mutation_args_touch_native(tool_args: Any) -> bool:
+    """Return True when edit/write args target a native source file."""
+    args = tool_args
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            return is_native_source_path(args)
+    if not isinstance(args, dict):
+        return False
+    for key in ("path", "file_path", "file", "filename", "target"):
+        val = args.get(key)
+        if val and is_native_source_path(str(val)):
+            return True
+    return False
+
+
+def looks_like_native_build_command(command: str) -> bool:
+    """Return True when *command* rebuilds native/C extension objects."""
+    if not command or not str(command).strip():
+        return False
+    lower = str(command).lower()
+    if re.search(r"\bmake\b", lower):
+        return True
+    if re.search(r"\bcargo\s+(check|build|test|clippy)\b", lower):
+        return True
+    if re.search(r"\b(gcc|clang|cc)\b", lower):
+        return True
+    if re.search(r"\bninja\b", lower):
+        return True
+    if re.search(r"\.o\b", lower):
+        return True
+    return False
+
+
+def verify_command_qualifies_for_completion(
+    command: str,
+    *,
+    native_mutated: bool,
+    success: bool,
+) -> bool:
+    """Return True when a successful verify command completes the verify gate."""
+    if not success or not looks_like_verify_command(command):
+        return False
+    if native_mutated and not looks_like_native_build_command(command):
+        return False
+    return True
 
 
 def is_shallow_signature_edit(old_string: str, new_string: str) -> bool:
@@ -574,6 +651,8 @@ def next_implement_continuation(
     shallow_only: bool,
     integration_attempted: bool = True,
     missing_symbols: tuple[str, ...] | list[str] = (),
+    native_mutated: bool = False,
+    native_build_verified: bool = False,
 ) -> str | None:
     """Pick the next headless continuation nudge, or None if done."""
     if not looks_like_implement_task(user_text):
@@ -586,6 +665,8 @@ def next_implement_continuation(
         return INTEGRATION_NUDGE
     if missing_symbols:
         return prompt_symbol_nudge(tuple(missing_symbols))
+    if native_mutated and not native_build_verified:
+        return NATIVE_BUILD_NUDGE
     if not verify_succeeded:
         if verify_attempted:
             return VERIFY_FAILED_NUDGE
@@ -617,6 +698,7 @@ def looks_like_git_archaeology(command: str) -> bool:
 __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
     "INTEGRATION_NUDGE",
+    "NATIVE_BUILD_NUDGE",
     "PROMPT_SYMBOL_NUDGE_TEMPLATE",
     "SHALLOW_EDIT_NUDGE",
     "STALL_CONTINUATION_NUDGE",
@@ -629,16 +711,20 @@ __all__ = [
     "extract_bash_command",
     "extract_bash_command_from_result",
     "extract_required_prompt_symbols",
+    "is_native_source_path",
     "is_shallow_signature_edit",
     "looks_like_git_archaeology",
     "looks_like_implement_task",
+    "looks_like_native_build_command",
     "looks_like_submit_command",
     "looks_like_verify_command",
     "missing_prompt_symbols",
+    "mutation_args_touch_native",
     "mutation_text_from_args",
     "next_implement_continuation",
     "prompt_symbol_nudge",
     "task_requires_submit",
     "tool_is_edit_existing",
     "tool_is_write_file",
+    "verify_command_qualifies_for_completion",
 ]

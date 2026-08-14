@@ -164,6 +164,68 @@ async def test_write_only_keeps_integration_nudge_even_after_verify() -> None:
 
 
 @pytest.mark.asyncio
+async def test_native_edit_requires_build_before_clearing_nudge() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={
+                    "file_path": "Objects/typevarobject.c",
+                    "old_string": "old_fn();",
+                    "new_string": "new_fn();",
+                },
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "./python -m test test_typing"},
+                tool_result=SimpleNamespace(success=True),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" in builder.sections
+
+
+@pytest.mark.asyncio
+async def test_native_build_clears_nudge() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={
+                    "file_path": "Objects/typevarobject.c",
+                    "old_string": "old_fn();",
+                    "new_string": "new_fn();",
+                },
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "make -j2 Objects/typevarobject.o"},
+                tool_result=SimpleNamespace(success=True),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" not in builder.sections
+
+
+@pytest.mark.asyncio
 async def test_real_edit_without_verify_still_nudges() -> None:
     rail = ImplementCompletenessRail()
     builder = _FakeBuilder()

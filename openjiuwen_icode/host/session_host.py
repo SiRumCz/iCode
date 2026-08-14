@@ -278,13 +278,15 @@ class SessionHost:
         submit_attempted = False
         shallow_only = True
         integration_attempted = False
+        native_mutated = False
+        native_build_verified = False
         mutation_blob_parts: list[str] = []
         continuation_attempts = 0
-        # Allow zero-mutation → shallow → integration → symbols → verify →
-        # verify-failed → submit chain in headless implement tasks.
+        # Allow zero-mutation → shallow → integration → symbols → native →
+        # verify → verify-failed → submit chain in headless implement tasks.
         # Budget for: zero-mutation → shallow → integration → symbols →
-        # verify → verify-failed → submit (plus one stall retry).
-        max_continuations = 7 if self._auto_approve else 0
+        # native → verify → verify-failed → submit (plus one stall retry).
+        max_continuations = 8 if self._auto_approve else 0
         if self._mutations is not None and sid:
             self._mutations.begin_turn(sid)
         try:
@@ -293,12 +295,15 @@ class SessionHost:
                 edit_args_look_shallow,
                 extract_bash_command,
                 extract_bash_command_from_result,
+                looks_like_native_build_command,
                 looks_like_submit_command,
                 looks_like_verify_command,
                 missing_prompt_symbols,
+                mutation_args_touch_native,
                 mutation_text_from_args,
                 next_implement_continuation,
                 tool_is_edit_existing,
+                verify_command_qualifies_for_completion,
             )
             from openjiuwen_icode.features.mutations import MUTATING_TOOLS
             from openjiuwen_icode.features.stream_stall import (
@@ -319,6 +324,8 @@ class SessionHost:
                     shallow_only=shallow_only,
                     integration_attempted=integration_attempted,
                     missing_symbols=missing,
+                    native_mutated=native_mutated,
+                    native_build_verified=native_build_verified,
                 )
 
             await self._bus.publish(
@@ -347,6 +354,11 @@ class SessionHost:
                                 if ev.tool_name in MUTATING_TOOLS:
                                     mutate_attempted = True
                                     verify_succeeded = False
+                                    if mutation_args_touch_native(
+                                        ev.tool_args
+                                    ):
+                                        native_mutated = True
+                                        native_build_verified = False
                                     if tool_is_edit_existing(ev.tool_name):
                                         integration_attempted = True
                                     chunk_text = mutation_text_from_args(
@@ -382,7 +394,18 @@ class SessionHost:
                                             tool_success=ev.tool_success,
                                         )
                                         if ok is True:
-                                            verify_succeeded = True
+                                            if looks_like_native_build_command(
+                                                cmd
+                                            ):
+                                                native_build_verified = True
+                                            if verify_command_qualifies_for_completion(
+                                                cmd,
+                                                native_mutated=native_mutated,
+                                                success=True,
+                                            ):
+                                                verify_succeeded = True
+                                            else:
+                                                verify_succeeded = False
                                         elif ok is False:
                                             verify_succeeded = False
                                     if looks_like_submit_command(cmd):
