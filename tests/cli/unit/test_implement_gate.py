@@ -207,16 +207,101 @@ def test_submit_before_verify_does_not_complete() -> None:
     )
 
 
-def test_submit_without_verify_attempt_still_needs_verify() -> None:
-    text = "Implement --config overrides then run lolbench-submit"
+def test_go_verify_command_detection() -> None:
+    assert looks_like_verify_command("go test ./evaluator ./repl -count=1")
+    assert looks_like_verify_command("go build ./...")
+    assert looks_like_verify_command("go vet ./...")
+
+
+def test_integration_and_prompt_symbol_continuation() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        INTEGRATION_NUDGE,
+        extract_required_prompt_symbols,
+        missing_prompt_symbols,
+        prompt_symbol_nudge,
+    )
+
+    text = (
+        "Implement require_cache_info() and reset_require_cache(), "
+        "preserve BeginRepl(args []string, version string), and support "
+        "`--module-debug` plus `--module-path` in script mode."
+    )
+    symbols = extract_required_prompt_symbols(text)
+    assert "require_cache_info" in symbols
+    assert "reset_require_cache" in symbols
+    assert "BeginRepl" in symbols
+    assert "--module-debug" in symbols
+
     assert (
         next_implement_continuation(
             user_text=text,
             mutate_attempted=True,
             verify_attempted=False,
             verify_succeeded=False,
-            submit_attempted=True,
+            submit_attempted=False,
             shallow_only=False,
+            integration_attempted=False,
         )
-        == VERIFY_NUDGE
+        == INTEGRATION_NUDGE
     )
+
+    missing = missing_prompt_symbols(
+        user_text=text,
+        mutation_blob="func requireCacheInfoFn() {}",
+    )
+    assert missing
+    nudge = next_implement_continuation(
+        user_text=text,
+        mutate_attempted=True,
+        verify_attempted=True,
+        verify_succeeded=True,
+        submit_attempted=False,
+        shallow_only=False,
+        integration_attempted=True,
+        missing_symbols=missing,
+    )
+    assert nudge == prompt_symbol_nudge(missing)
+    assert "BeginRepl" in (nudge or "")
+
+    covered = missing_prompt_symbols(
+        user_text=text,
+        mutation_blob=(
+            "require_cache_info reset_require_cache BeginRepl "
+            "--module-debug --module-path"
+        ),
+    )
+    assert covered == ()
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
+            submit_attempted=False,
+            shallow_only=False,
+            integration_attempted=True,
+            missing_symbols=(),
+        )
+        is None
+    )
+
+
+def test_mutation_text_and_edit_tool_helpers() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        mutation_text_from_args,
+        tool_is_edit_existing,
+        tool_is_write_file,
+    )
+
+    assert tool_is_edit_existing("edit_file")
+    assert tool_is_write_file("write_file")
+    assert not tool_is_edit_existing("write_file")
+    blob = mutation_text_from_args(
+        {
+            "file_path": "evaluator/functions.go",
+            "old_string": "old",
+            "new_string": ' "require_cache_info": &object.Builtin{',
+        }
+    )
+    assert "require_cache_info" in blob
+    assert "functions.go" in blob

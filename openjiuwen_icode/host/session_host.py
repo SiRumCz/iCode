@@ -277,10 +277,14 @@ class SessionHost:
         verify_succeeded = False
         submit_attempted = False
         shallow_only = True
+        integration_attempted = False
+        mutation_blob_parts: list[str] = []
         continuation_attempts = 0
-        # Allow zero-mutation → shallow → verify → verify-failed → submit
-        # chain in headless implement tasks.
-        max_continuations = 5 if self._auto_approve else 0
+        # Allow zero-mutation → shallow → integration → symbols → verify →
+        # verify-failed → submit chain in headless implement tasks.
+        # Budget for: zero-mutation → shallow → integration → symbols →
+        # verify → verify-failed → submit (plus one stall retry).
+        max_continuations = 7 if self._auto_approve else 0
         if self._mutations is not None and sid:
             self._mutations.begin_turn(sid)
         try:
@@ -291,12 +295,31 @@ class SessionHost:
                 extract_bash_command_from_result,
                 looks_like_submit_command,
                 looks_like_verify_command,
+                missing_prompt_symbols,
+                mutation_text_from_args,
                 next_implement_continuation,
+                tool_is_edit_existing,
             )
             from openjiuwen_icode.features.mutations import MUTATING_TOOLS
             from openjiuwen_icode.features.stream_stall import (
                 StreamStallError,
             )
+
+            def _continuation_nudge() -> str | None:
+                missing = missing_prompt_symbols(
+                    user_text=event.text,
+                    mutation_blob="\n".join(mutation_blob_parts),
+                )
+                return next_implement_continuation(
+                    user_text=event.text,
+                    mutate_attempted=mutate_attempted,
+                    verify_attempted=verify_attempted,
+                    verify_succeeded=verify_succeeded,
+                    submit_attempted=submit_attempted,
+                    shallow_only=shallow_only,
+                    integration_attempted=integration_attempted,
+                    missing_symbols=missing,
+                )
 
             await self._bus.publish(
                 TurnStarted(text=event.text, session_id=sid)
@@ -324,6 +347,13 @@ class SessionHost:
                                 if ev.tool_name in MUTATING_TOOLS:
                                     mutate_attempted = True
                                     verify_succeeded = False
+                                    if tool_is_edit_existing(ev.tool_name):
+                                        integration_attempted = True
+                                    chunk_text = mutation_text_from_args(
+                                        ev.tool_args
+                                    )
+                                    if chunk_text:
+                                        mutation_blob_parts.append(chunk_text)
                                     if not edit_args_look_shallow(
                                         ev.tool_args
                                     ):
@@ -377,14 +407,7 @@ class SessionHost:
                                 await self._bus.publish(ev)
                 except StreamStallError:
                     if continuation_attempts < max_continuations:
-                        nudge = next_implement_continuation(
-                            user_text=event.text,
-                            mutate_attempted=mutate_attempted,
-                            verify_attempted=verify_attempted,
-                            verify_succeeded=verify_succeeded,
-                            submit_attempted=submit_attempted,
-                            shallow_only=shallow_only,
-                        )
+                        nudge = _continuation_nudge()
                         if nudge is not None:
                             continuation_attempts += 1
                             query = nudge
@@ -405,16 +428,9 @@ class SessionHost:
                     query = interactive
                     continue
 
-                # Headless code tasks: require mutate → (full edit) → verify
-                # → submit when the user asked for an implement/deliver task.
-                nudge = next_implement_continuation(
-                    user_text=event.text,
-                    mutate_attempted=mutate_attempted,
-                    verify_attempted=verify_attempted,
-                    verify_succeeded=verify_succeeded,
-                    submit_attempted=submit_attempted,
-                    shallow_only=shallow_only,
-                )
+                # Headless code tasks: require mutate → (full edit) →
+                # integration → prompt symbols → verify → submit.
+                nudge = _continuation_nudge()
                 if nudge is not None and continuation_attempts < max_continuations:
                     continuation_attempts += 1
                     query = nudge

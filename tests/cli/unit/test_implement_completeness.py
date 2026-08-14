@@ -130,6 +130,40 @@ async def test_failed_verify_keeps_nudge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_only_keeps_integration_nudge_even_after_verify() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="write_file",
+                tool_args={
+                    "file_path": "/tmp/modules.go",
+                    "content": "package evaluator\nfunc helper() {}\n",
+                },
+                tool_result=None,
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "go build ./..."},
+                tool_result=SimpleNamespace(
+                    success=True,
+                    data="Command: go build ./...\nExit Code: 0",
+                ),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" in builder.sections
+
+
+@pytest.mark.asyncio
 async def test_real_edit_without_verify_still_nudges() -> None:
     rail = ImplementCompletenessRail()
     builder = _FakeBuilder()

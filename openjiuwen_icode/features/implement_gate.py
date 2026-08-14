@@ -39,6 +39,8 @@ _VERIFY_HINTS = (
     "pnpm test",
     "yarn test",
     "go test",
+    "go build",
+    "go vet",
     "make test",
     "make check",
     "mvn test",
@@ -71,7 +73,148 @@ _LOGIC_MARKERS = (
     "value_parser",
 )
 
-_DEF_MARKERS = ("fn ", "struct ", "enum ", "impl ", "trait ", "mod ")
+_DEF_MARKERS = (
+    "fn ",
+    "struct ",
+    "enum ",
+    "impl ",
+    "trait ",
+    "mod ",
+    "func ",
+    "type ",
+    "package ",
+)
+
+# Common English / task words that look like identifiers but are not APIs.
+_SYMBOL_STOPWORDS = frozenset(
+    {
+        "implement",
+        "improve",
+        "create",
+        "update",
+        "change",
+        "modify",
+        "refactor",
+        "write",
+        "read",
+        "return",
+        "require",
+        "support",
+        "handle",
+        "report",
+        "preserve",
+        "prefer",
+        "please",
+        "expected",
+        "outcome",
+        "outcomes",
+        "example",
+        "examples",
+        "following",
+        "behavior",
+        "behaviors",
+        "script",
+        "scripts",
+        "module",
+        "modules",
+        "cache",
+        "debug",
+        "trace",
+        "error",
+        "errors",
+        "message",
+        "messages",
+        "string",
+        "strings",
+        "value",
+        "values",
+        "entry",
+        "entries",
+        "path",
+        "paths",
+        "file",
+        "files",
+        "directory",
+        "directories",
+        "environment",
+        "runtime",
+        "invocation",
+        "option",
+        "options",
+        "argument",
+        "arguments",
+        "command",
+        "commands",
+        "public",
+        "entrypoint",
+        "entrypoints",
+        "internal",
+        "helper",
+        "helpers",
+        "function",
+        "functions",
+        "signature",
+        "signatures",
+        "implementation",
+        "implementations",
+        "important",
+        "execution",
+        "rules",
+        "repository",
+        "evaluation",
+        "working",
+        "leaves",
+        "leave",
+        "commit",
+        "committed",
+        "harness",
+        "captures",
+        "adapter",
+        "truthy",
+        "normalize",
+        "deduplicate",
+        "canonical",
+        "absolute",
+        "relative",
+        "equivalent",
+        "deterministic",
+        "discovery",
+        "loading",
+        "loader",
+        "cyclic",
+        "cycle",
+        "import",
+        "imports",
+        "resolve",
+        "resolution",
+        "candidate",
+        "candidates",
+        "precedence",
+        "fallback",
+        "stderr",
+        "stdout",
+        "stdio",
+        "index",
+        "main",
+        "test",
+        "tests",
+        "assert",
+        "true",
+        "false",
+        "null",
+        "none",
+        "todo",
+        "note",
+        "notes",
+    }
+)
+
+_EDIT_TOOL_NAMES = frozenset(
+    {"edit_file", "Edit", "edit"}
+)
+_WRITE_TOOL_NAMES = frozenset(
+    {"write_file", "Write", "write"}
+)
 
 STALL_CONTINUATION_NUDGE = (
     "Your previous response stalled mid-stream. Continue the same task now. "
@@ -100,14 +243,32 @@ SHALLOW_EDIT_NUDGE = (
     "or apply/resolve wiring). That is not a complete implementation. "
     "Continue: implement the full behavior the user requested, update all "
     "call sites, then run a compile/check command via `bash` (for Rust: "
-    "`cargo check` or a targeted `cargo test`). Do not stop after type-only "
+    "`cargo check` or a targeted `cargo test`; for Go: `go test` / "
+    "`go build` on the touched packages). Do not stop after type-only "
     "edits."
+)
+
+INTEGRATION_NUDGE = (
+    "You added or rewrote files with `write_file` but did not `edit_file` "
+    "existing call sites / entrypoints. Do not invent a parallel module that "
+    "is never wired in (for example a new loader that never updates "
+    "`requireFn`, `GetFns`, or `BeginRepl`). Edit the existing files that must "
+    "register or invoke your helpers, then verify with `bash` "
+    "(`go test` / `go build` for Go; `cargo check` for Rust)."
+)
+
+PROMPT_SYMBOL_NUDGE_TEMPLATE = (
+    "Your patch is missing symbols/APIs the user named: {symbols}. "
+    "Wire those into the existing code (register builtins, update call "
+    "sites, parse CLI flags as required). Do not leave helpers unused. "
+    "Then verify with `bash`."
 )
 
 VERIFY_NUDGE = (
     "You modified files but have not verified the build/tests. "
     "Call `bash` now to run a compile or targeted test command appropriate "
     "for this repo (for Rust: `cargo check` or a focused `cargo test`; "
+    "for Go: `go test` / `go build` on the packages you touched; "
     "for CPython: `make regen-pegen regen-ast` then "
     "`CCACHE_DISABLE=1 make -j2 python`). "
     "Fix any errors that appear, then continue. If the user required a "
@@ -269,6 +430,140 @@ def edit_args_look_shallow(tool_args: Any) -> bool:
     return False
 
 
+def tool_is_edit_existing(tool_name: str) -> bool:
+    """Return True when *tool_name* edits an existing file in place."""
+    return str(tool_name or "") in _EDIT_TOOL_NAMES
+
+
+def tool_is_write_file(tool_name: str) -> bool:
+    """Return True when *tool_name* is a full-file write."""
+    return str(tool_name or "") in _WRITE_TOOL_NAMES
+
+
+def mutation_text_from_args(tool_args: Any) -> str:
+    """Extract textual payload from edit/write tool args for symbol coverage."""
+    args = tool_args
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            return args
+    if not isinstance(args, dict):
+        return ""
+    parts: list[str] = []
+    for key in (
+        "new_string",
+        "new_str",
+        "content",
+        "contents",
+        "old_string",
+        "old_str",
+        "file_path",
+        "path",
+    ):
+        val = args.get(key)
+        if val:
+            parts.append(str(val))
+    return "\n".join(parts)
+
+
+def _normalize_symbol_token(raw: str) -> str:
+    tok = (raw or "").strip().strip("`\"'")
+    if not tok:
+        return ""
+    # require_cache_info() / pkg.BeginRepl → strip call parens / keep leaf.
+    if "(" in tok:
+        tok = tok.split("(", 1)[0].strip()
+    return tok
+
+
+def _is_strong_symbol(tok: str) -> bool:
+    """Keep API-like tokens; drop prose / short field names."""
+    if not tok or len(tok) < 4:
+        return False
+    lower = tok.lower()
+    if lower in _SYMBOL_STOPWORDS:
+        return False
+    if "/" in tok or " " in tok:
+        return False
+    if tok.startswith("--") and len(tok) >= 5:
+        return True
+    # ABS_MODULE_PATH / require_cache_info
+    if "_" in tok and len(tok) >= 6:
+        return True
+    # BeginRepl / GetFns (reject Titlecase prose like "Expose")
+    if re.match(r"^[A-Z][a-zA-Z0-9]{4,}$", tok):
+        if re.match(r"^[A-Z][a-z]+$", tok):
+            return False
+        return True
+    return False
+
+
+def extract_required_prompt_symbols(text: str) -> tuple[str, ...]:
+    """Pull API / flag names the user likely expects to appear in the patch."""
+    if not text or not str(text).strip():
+        return ()
+    found: list[str] = []
+
+    def _add(token: str) -> None:
+        tok = _normalize_symbol_token(token)
+        if not _is_strong_symbol(tok):
+            return
+        if tok not in found:
+            found.append(tok)
+        if "." in tok:
+            leaf = tok.rsplit(".", 1)[-1]
+            if leaf != tok:
+                _add(leaf)
+
+    for m in re.finditer(r"`([^`]+)`", text):
+        _add(m.group(1))
+    for m in re.finditer(r"\b([A-Za-z_][\w]{3,})\(\)", text):
+        _add(m.group(1))
+    for m in re.finditer(r"(--[a-zA-Z][\w-]{2,})", text):
+        _add(m.group(1))
+    # CamelCase entrypoints (BeginRepl) not already captured.
+    for m in re.finditer(r"\b([A-Z][a-zA-Z0-9]{5,})\b", text):
+        _add(m.group(1))
+
+    # Cap so a long instruction cannot demand dozens of tokens.
+    return tuple(found[:16])
+
+
+def missing_prompt_symbols(
+    *,
+    user_text: str,
+    mutation_blob: str,
+    min_required: int = 2,
+    coverage_ratio: float = 0.5,
+) -> tuple[str, ...]:
+    """Return important prompt symbols still absent from mutation text.
+
+    Requires at least *min_required* extracted symbols before gating, and
+    only reports missing ones when coverage is below *coverage_ratio*.
+    """
+    required = extract_required_prompt_symbols(user_text)
+    if len(required) < min_required:
+        return ()
+    blob = mutation_blob or ""
+    blob_lower = blob.lower()
+    missing = tuple(
+        sym
+        for sym in required
+        if sym not in blob and sym.lower() not in blob_lower
+    )
+    covered = len(required) - len(missing)
+    if covered / max(len(required), 1) >= coverage_ratio:
+        return ()
+    return missing[:8]
+
+
+def prompt_symbol_nudge(missing: tuple[str, ...] | list[str]) -> str:
+    """Format a continuation nudge listing missing prompt symbols."""
+    symbols = ", ".join(f"`{s}`" for s in missing)
+    return PROMPT_SYMBOL_NUDGE_TEMPLATE.format(symbols=symbols or "(none)")
+
+
 def next_implement_continuation(
     *,
     user_text: str,
@@ -277,6 +572,8 @@ def next_implement_continuation(
     verify_succeeded: bool,
     submit_attempted: bool,
     shallow_only: bool,
+    integration_attempted: bool = True,
+    missing_symbols: tuple[str, ...] | list[str] = (),
 ) -> str | None:
     """Pick the next headless continuation nudge, or None if done."""
     if not looks_like_implement_task(user_text):
@@ -285,6 +582,10 @@ def next_implement_continuation(
         return ZERO_MUTATION_NUDGE
     if shallow_only:
         return SHALLOW_EDIT_NUDGE
+    if not integration_attempted:
+        return INTEGRATION_NUDGE
+    if missing_symbols:
+        return prompt_symbol_nudge(tuple(missing_symbols))
     if not verify_succeeded:
         if verify_attempted:
             return VERIFY_FAILED_NUDGE
@@ -315,6 +616,8 @@ def looks_like_git_archaeology(command: str) -> bool:
 
 __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
+    "INTEGRATION_NUDGE",
+    "PROMPT_SYMBOL_NUDGE_TEMPLATE",
     "SHALLOW_EDIT_NUDGE",
     "STALL_CONTINUATION_NUDGE",
     "SUBMIT_NUDGE",
@@ -325,11 +628,17 @@ __all__ = [
     "edit_args_look_shallow",
     "extract_bash_command",
     "extract_bash_command_from_result",
+    "extract_required_prompt_symbols",
     "is_shallow_signature_edit",
     "looks_like_git_archaeology",
     "looks_like_implement_task",
     "looks_like_submit_command",
     "looks_like_verify_command",
+    "missing_prompt_symbols",
+    "mutation_text_from_args",
     "next_implement_continuation",
+    "prompt_symbol_nudge",
     "task_requires_submit",
+    "tool_is_edit_existing",
+    "tool_is_write_file",
 ]

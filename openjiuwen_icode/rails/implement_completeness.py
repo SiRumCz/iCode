@@ -17,6 +17,8 @@ from openjiuwen_icode.features.implement_gate import (
     extract_bash_command_from_result,
     looks_like_submit_command,
     looks_like_verify_command,
+    mutation_text_from_args,
+    tool_is_edit_existing,
 )
 from openjiuwen_icode.features.mutations import MUTATING_TOOLS
 
@@ -27,22 +29,38 @@ _SHALLOW_EN = (
     "## Incomplete edit reminder\n"
     "Recent edits look signature/docs-only (type swaps without parsers, "
     "validation, or apply/resolve wiring). Keep implementing the full "
-    "behavior, then verify with `bash` (`cargo check` / targeted tests)."
+    "behavior, then verify with `bash` (`cargo check` / `go test` / "
+    "targeted tests)."
 )
 
 _SHALLOW_CN = (
     "## 改动不完整提醒\n"
     "最近的编辑看起来只改了类型签名/文档（例如 Option→Vec，但没有 parser、"
     "校验或 apply/resolve）。请继续实现完整行为，并用 `bash` 做编译/"
-    "针对性测试验证（Rust 可用 `cargo check`）。"
+    "针对性测试验证（Rust: `cargo check`；Go: `go test` / `go build`）。"
+)
+
+_INTEGRATION_EN = (
+    "## Integration reminder\n"
+    "You wrote new files but have not `edit_file`'d existing call sites. "
+    "Do not leave a parallel module unwired — update the real entrypoints "
+    "(registration, require/load path, CLI parsing) that must call your "
+    "helpers, then verify with `bash`."
+)
+
+_INTEGRATION_CN = (
+    "## 接入提醒\n"
+    "你写了新文件，但还没有用 `edit_file` 修改现有 call site。"
+    "不要留下未接入的平行模块——请改真正的入口（注册、require/load、"
+    "CLI 解析），再用 `bash` 验证。"
 )
 
 _VERIFY_EN = (
     "## Verify reminder\n"
     "You already modified files. Before finishing, run a compile or "
-    "targeted test via `bash`. Fix failures. If the user named a submit "
-    "command (e.g. `lolbench-submit`), run it only after verification "
-    "succeeds."
+    "targeted test via `bash` (Rust: `cargo check`; Go: `go test` / "
+    "`go build`). Fix failures. If the user named a submit command "
+    "(e.g. `lolbench-submit`), run it only after verification succeeds."
 )
 
 _VERIFY_FAILED_EN = (
@@ -53,7 +71,8 @@ _VERIFY_FAILED_EN = (
 
 _VERIFY_CN = (
     "## 验证提醒\n"
-    "你已修改文件。结束前请用 `bash` 跑编译或针对性测试，并根据报错继续修。"
+    "你已修改文件。结束前请用 `bash` 跑编译或针对性测试"
+    "（Rust: `cargo check`；Go: `go test` / `go build`），并根据报错继续修。"
     "若用户要求提交命令（例如 `lolbench-submit`），验证通过后再执行。"
 )
 
@@ -72,6 +91,7 @@ class ImplementCompletenessRail(DeepAgentRail):
         super().__init__()
         self._mutated = False
         self._shallow_only = True
+        self._integration_attempted = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -85,6 +105,7 @@ class ImplementCompletenessRail(DeepAgentRail):
         )
         self._mutated = False
         self._shallow_only = True
+        self._integration_attempted = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -99,6 +120,10 @@ class ImplementCompletenessRail(DeepAgentRail):
         if name in MUTATING_TOOLS:
             self._mutated = True
             self._verify_succeeded = False
+            if tool_is_edit_existing(name):
+                self._integration_attempted = True
+            # Keep blob tracking available for future rail use.
+            _ = mutation_text_from_args(args)
             if not edit_args_look_shallow(args):
                 self._shallow_only = False
             return
@@ -134,7 +159,11 @@ class ImplementCompletenessRail(DeepAgentRail):
 
         if not self._mutated:
             return
-        if self._verify_succeeded and not self._shallow_only:
+        if (
+            self._verify_succeeded
+            and not self._shallow_only
+            and self._integration_attempted
+        ):
             return
 
         lang = getattr(builder, "language", "en") or "en"
@@ -142,6 +171,13 @@ class ImplementCompletenessRail(DeepAgentRail):
         if self._shallow_only:
             text = _SHALLOW_CN if zh else _SHALLOW_EN
             content = {"en": _SHALLOW_EN, "cn": _SHALLOW_CN, lang: text}
+        elif not self._integration_attempted:
+            text = _INTEGRATION_CN if zh else _INTEGRATION_EN
+            content = {
+                "en": _INTEGRATION_EN,
+                "cn": _INTEGRATION_CN,
+                lang: text,
+            }
         elif self._verify_attempted and not self._verify_succeeded:
             text = _VERIFY_FAILED_CN if zh else _VERIFY_FAILED_EN
             content = {

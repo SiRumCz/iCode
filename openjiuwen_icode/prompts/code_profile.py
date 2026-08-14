@@ -63,9 +63,11 @@ When the user asks you to implement, fix, add, refactor, or otherwise change cod
 2. Edit immediately with `edit_file` / `write_file`. Do not stop after analysis or a design write-up. When adding fields to a struct or similar aggregate, insert new lines — do not swap out unrelated existing members.
 3. Prefer concrete patches in the worktree over reconstructing upstream PRs from memory. Do not spend the session on `git log` archaeology — eval checkouts are often pruned to the base commit with no solution history.
 4. Do not stop after signature/docs-only edits (e.g. changing a field type). Wire parsers, validation, call sites, and apply/resolve logic the behavior needs.
-5. After edits, verify with `bash` (compile/check or targeted tests; for Rust prefer `cargo check` / focused `cargo test`) and fix failures.
-6. If the user names a deliverable command or artifact (for example `lolbench-submit`, a patch path), run it / produce it before finishing.
-7. Never treat "I understand the approach" as task completion when code changes were requested and no files were modified.
+5. Prefer editing existing entrypoints over inventing a parallel module that is never registered or called. If you add helpers, `edit_file` the real call sites (registration tables, loaders, CLI parsers) in the same turn.
+6. When the user names APIs, builtins, or flags (for example `require_cache_info()`, `BeginRepl`, `--module-debug`), those strings must appear in the working tree as wired behavior — not only as unused helpers.
+7. After edits, verify with `bash` (compile/check or targeted tests; for Rust prefer `cargo check` / focused `cargo test`; for Go prefer `go test` / `go build` on touched packages) and fix failures until the build succeeds.
+8. If the user names a deliverable command or artifact (for example `lolbench-submit`, a patch path), run it / produce it before finishing.
+9. Never treat "I understand the approach" as task completion when code changes were requested and no files were modified.
 """
 
 CODE_EXECUTION_POLICY_CN = """\
@@ -76,9 +78,11 @@ CODE_EXECUTION_POLICY_CN = """\
 2. 立刻用 `edit_file` / `write_file` 改代码；不要停在分析或设计长文。向 struct 等聚合体新增字段时只插入新行，不要替换无关的已有成员。
 3. 优先在工作区落小补丁，而不是凭记忆复刻上游 PR。不要把会话花在 `git log` 考古上——评测工作区常常只保留 base commit，没有可找回的上游解。
 4. 不要停在仅改类型签名/文档（例如只改字段类型）；补齐 parser、校验、call site 与 apply/resolve 等行为所需逻辑。
-5. 改完后用 `bash` 做编译/检查或针对性测试（Rust 优先 `cargo check` / 聚焦 `cargo test`），并根据失败继续修。
-6. 若用户指定了交付命令或产物（例如 `lolbench-submit`、patch 路径），结束前必须执行/生成。
-7. 在已要求改代码却尚未修改任何文件时，不要把「已理解方案」当成任务完成。
+5. 优先改现有入口，而不是写一个从未注册/调用的平行模块；若新增 helper，同一轮要用 `edit_file` 改真正的 call site（注册表、loader、CLI 解析）。
+6. 当用户点名了 API、builtin 或 flag（例如 `require_cache_info()`、`BeginRepl`、`--module-debug`），这些字符串必须作为已接入行为出现在工作区，而不是未使用的 helper。
+7. 改完后用 `bash` 做编译/检查或针对性测试（Rust 优先 `cargo check` / 聚焦 `cargo test`；Go 优先对改动包跑 `go test` / `go build`），直到构建成功。
+8. 若用户指定了交付命令或产物（例如 `lolbench-submit`、patch 路径），结束前必须执行/生成。
+9. 在已要求改代码却尚未修改任何文件时，不要把「已理解方案」当成任务完成。
 """
 
 CODE_EXECUTION_POLICY: Dict[str, str] = {
