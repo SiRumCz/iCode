@@ -280,13 +280,13 @@ class SessionHost:
         integration_attempted = False
         native_mutated = False
         native_build_verified = False
+        python_mutated = False
+        python_suite_verified = False
         mutation_blob_parts: list[str] = []
         continuation_attempts = 0
         # Allow zero-mutation → shallow → integration → symbols → native →
-        # verify → verify-failed → submit chain in headless implement tasks.
-        # Budget for: zero-mutation → shallow → integration → symbols →
-        # native → verify → verify-failed → submit (plus one stall retry).
-        max_continuations = 8 if self._auto_approve else 0
+        # python-suite → verify → verify-failed → submit chain.
+        max_continuations = 9 if self._auto_approve else 0
         if self._mutations is not None and sid:
             self._mutations.begin_turn(sid)
         try:
@@ -296,10 +296,12 @@ class SessionHost:
                 extract_bash_command,
                 extract_bash_command_from_result,
                 looks_like_native_build_command,
+                looks_like_python_suite_command,
                 looks_like_submit_command,
                 looks_like_verify_command,
                 missing_prompt_symbols,
                 mutation_args_touch_native,
+                mutation_args_touch_python,
                 mutation_text_from_args,
                 next_implement_continuation,
                 tool_is_edit_existing,
@@ -326,6 +328,8 @@ class SessionHost:
                     missing_symbols=missing,
                     native_mutated=native_mutated,
                     native_build_verified=native_build_verified,
+                    python_mutated=python_mutated,
+                    python_suite_verified=python_suite_verified,
                 )
 
             await self._bus.publish(
@@ -359,6 +363,11 @@ class SessionHost:
                                     ):
                                         native_mutated = True
                                         native_build_verified = False
+                                    if mutation_args_touch_python(
+                                        ev.tool_args
+                                    ):
+                                        python_mutated = True
+                                        python_suite_verified = False
                                     if tool_is_edit_existing(ev.tool_name):
                                         integration_attempted = True
                                     chunk_text = mutation_text_from_args(
@@ -398,9 +407,14 @@ class SessionHost:
                                                 cmd
                                             ):
                                                 native_build_verified = True
+                                            if looks_like_python_suite_command(
+                                                cmd
+                                            ):
+                                                python_suite_verified = True
                                             if verify_command_qualifies_for_completion(
                                                 cmd,
                                                 native_mutated=native_mutated,
+                                                python_mutated=python_mutated,
                                                 success=True,
                                             ):
                                                 verify_succeeded = True

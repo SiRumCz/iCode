@@ -16,9 +16,11 @@ from openjiuwen_icode.features.implement_gate import (
     extract_bash_command,
     extract_bash_command_from_result,
     looks_like_native_build_command,
+    looks_like_python_suite_command,
     looks_like_submit_command,
     looks_like_verify_command,
     mutation_args_touch_native,
+    mutation_args_touch_python,
     mutation_text_from_args,
     tool_is_edit_existing,
     verify_command_qualifies_for_completion,
@@ -71,13 +73,27 @@ _NATIVE_BUILD_CN = (
     "对象。请用 `bash` 执行 `make -j2` 或重建相关 `.o`，修复编译错误后再提交。"
 )
 
+_PYTHON_SUITE_EN = (
+    "## Python test suite required\n"
+    "You edited `.py` files. `compileall` / `python -c` are not enough — "
+    "discover and run the relevant tests via `bash` (`pytest` or "
+    "`python -m pytest` on the packages you touched), fix failures, and "
+    "re-run until they pass."
+)
+
+_PYTHON_SUITE_CN = (
+    "## 需要跑 Python 测试套件\n"
+    "你修改了 `.py` 文件。仅 `compileall` / `python -c` 不够——请用 `bash` "
+    "发现并运行相关测试（`pytest` 或 `python -m pytest`），修失败用例直到通过。"
+)
+
 _VERIFY_EN = (
     "## Verify reminder\n"
     "You already modified files. Before finishing, run a compile or "
-    "targeted test via `bash` (Rust: `cargo check`; Go: `go test` / "
-    "`go build`; CPython/C: `make -j2`). Fix failures. If the user named "
-    "a submit command (e.g. `lolbench-submit`), run it only after "
-    "verification succeeds."
+    "targeted test via `bash` (Python: `pytest`; Rust: `cargo check`; "
+    "Go: `go test` / `go build`; CPython/C: `make -j2`). Fix failures. "
+    "If the user named a submit command (e.g. `lolbench-submit`), run it "
+    "only after verification succeeds."
 )
 
 _VERIFY_FAILED_EN = (
@@ -89,8 +105,8 @@ _VERIFY_FAILED_EN = (
 _VERIFY_CN = (
     "## 验证提醒\n"
     "你已修改文件。结束前请用 `bash` 跑编译或针对性测试"
-    "（Rust: `cargo check`；Go: `go test` / `go build`；CPython/C: "
-    "`make -j2`），并根据报错继续修。"
+    "（Python: `pytest`；Rust: `cargo check`；Go: `go test` / `go build`；"
+    "CPython/C: `make -j2`），并根据报错继续修。"
     "若用户要求提交命令（例如 `lolbench-submit`），验证通过后再执行。"
 )
 
@@ -112,6 +128,8 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._integration_attempted = False
         self._native_mutated = False
         self._native_build_verified = False
+        self._python_mutated = False
+        self._python_suite_verified = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -128,6 +146,8 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._integration_attempted = False
         self._native_mutated = False
         self._native_build_verified = False
+        self._python_mutated = False
+        self._python_suite_verified = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -145,6 +165,9 @@ class ImplementCompletenessRail(DeepAgentRail):
             if mutation_args_touch_native(args):
                 self._native_mutated = True
                 self._native_build_verified = False
+            if mutation_args_touch_python(args):
+                self._python_mutated = True
+                self._python_suite_verified = False
             if tool_is_edit_existing(name):
                 self._integration_attempted = True
             # Keep blob tracking available for future rail use.
@@ -171,9 +194,12 @@ class ImplementCompletenessRail(DeepAgentRail):
                     if ok is True:
                         if looks_like_native_build_command(result_cmd):
                             self._native_build_verified = True
+                        if looks_like_python_suite_command(result_cmd):
+                            self._python_suite_verified = True
                         if verify_command_qualifies_for_completion(
                             result_cmd,
                             native_mutated=self._native_mutated,
+                            python_mutated=self._python_mutated,
                             success=True,
                         ):
                             self._verify_succeeded = True
@@ -198,6 +224,11 @@ class ImplementCompletenessRail(DeepAgentRail):
             and not self._shallow_only
             and self._integration_attempted
             and (not self._native_mutated or self._native_build_verified)
+            and (
+                not self._python_mutated
+                or self._native_mutated
+                or self._python_suite_verified
+            )
         ):
             return
 
@@ -218,6 +249,17 @@ class ImplementCompletenessRail(DeepAgentRail):
             content = {
                 "en": _NATIVE_BUILD_EN,
                 "cn": _NATIVE_BUILD_CN,
+                lang: text,
+            }
+        elif (
+            self._python_mutated
+            and not self._native_mutated
+            and not self._python_suite_verified
+        ):
+            text = _PYTHON_SUITE_CN if zh else _PYTHON_SUITE_EN
+            content = {
+                "en": _PYTHON_SUITE_EN,
+                "cn": _PYTHON_SUITE_CN,
                 lang: text,
             }
         elif self._verify_attempted and not self._verify_succeeded:

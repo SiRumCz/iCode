@@ -164,6 +164,80 @@ async def test_write_only_keeps_integration_nudge_even_after_verify() -> None:
 
 
 @pytest.mark.asyncio
+async def test_python_edit_requires_pytest_before_clearing_nudge() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={
+                    "file_path": "aiomonitor/monitor.py",
+                    "old_string": "old",
+                    "new_string": "new helper logic\n",
+                },
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "python -m compileall aiomonitor"},
+                tool_result=SimpleNamespace(
+                    success=True,
+                    data=(
+                        "Command: python -m compileall aiomonitor\n"
+                        "Exit Code: 0"
+                    ),
+                ),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" in builder.sections
+
+
+@pytest.mark.asyncio
+async def test_python_pytest_clears_nudge() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={
+                    "file_path": "aiomonitor/monitor.py",
+                    "old_string": "old",
+                    "new_string": "new helper logic\n",
+                },
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "pytest -q tests/test_snapshot.py"},
+                tool_result=SimpleNamespace(
+                    success=True,
+                    data=(
+                        "Command: pytest -q tests/test_snapshot.py\n"
+                        "Exit Code: 0"
+                    ),
+                ),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" not in builder.sections
+
+
+@pytest.mark.asyncio
 async def test_native_edit_requires_build_before_clearing_nudge() -> None:
     rail = ImplementCompletenessRail()
     builder = _FakeBuilder()

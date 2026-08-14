@@ -62,6 +62,8 @@ _NATIVE_SOURCE_SUFFIXES = (
     ".go",
 )
 
+_PYTHON_SOURCE_SUFFIXES = (".py",)
+
 _SUBMIT_HINTS = (
     "lolbench-submit",
     "solution.patch",
@@ -278,7 +280,9 @@ PROMPT_SYMBOL_NUDGE_TEMPLATE = (
 VERIFY_NUDGE = (
     "You modified files but have not verified the build/tests. "
     "Call `bash` now to run a compile or targeted test command appropriate "
-    "for this repo (for Rust: `cargo check` or a focused `cargo test`; "
+    "for this repo (for Python: `pytest` on the relevant tests — "
+    "`compileall` alone is not enough; "
+    "for Rust: `cargo check` or a focused `cargo test`; "
     "for Go: `go test` / `go build` on the packages you touched; "
     "for CPython/C: `make -j2` or a targeted object rebuild; "
     "for CPython grammar: `make regen-pegen regen-ast` then "
@@ -291,7 +295,8 @@ VERIFY_NUDGE = (
 VERIFY_FAILED_NUDGE = (
     "Your last compile/check command failed (non-zero exit). "
     "Read the errors, fix the code, and run verification again via `bash` "
-    "(for C extensions: `make -j2` or rebuild the touched `.o`; for Rust: "
+    "(for Python: re-run the failing `pytest` cases; "
+    "for C extensions: `make -j2` or rebuild the touched `.o`; for Rust: "
     "`cargo check`; for Go: `go test` / `go build`). Do not run "
     "submit/deliver until the build/check passes."
 )
@@ -310,6 +315,14 @@ NATIVE_BUILD_NUDGE = (
     "Run a native build via `bash` (`make -j2`, rebuild touched `.o` "
     "files, or `cargo check` for Rust) and fix compile errors before "
     "submit/deliver."
+)
+
+PYTHON_SUITE_NUDGE = (
+    "You edited Python sources but have not run a real test suite. "
+    "`compileall`, `python -c`, or typecheck-only commands are not enough. "
+    "Discover and run the relevant tests via `bash` now — typically "
+    "`pytest` (or `python -m pytest`) on the package/tests you touched — "
+    "fix failures, and re-run until they pass before finishing."
 )
 
 
@@ -382,21 +395,46 @@ def is_native_source_path(path: str) -> bool:
     return lower.endswith(_NATIVE_SOURCE_SUFFIXES)
 
 
-def mutation_args_touch_native(tool_args: Any) -> bool:
-    """Return True when edit/write args target a native source file."""
+def is_python_source_path(path: str) -> bool:
+    """Return True when *path* looks like a Python source file."""
+    if not path or not str(path).strip():
+        return False
+    lower = str(path).lower().split("?", 1)[0]
+    return lower.endswith(_PYTHON_SOURCE_SUFFIXES)
+
+
+def _mutation_args_touch_suffixes(
+    tool_args: Any,
+    *,
+    predicate,
+) -> bool:
     args = tool_args
     if isinstance(args, str):
         try:
             args = json.loads(args)
         except json.JSONDecodeError:
-            return is_native_source_path(args)
+            return bool(predicate(args))
     if not isinstance(args, dict):
         return False
     for key in ("path", "file_path", "file", "filename", "target"):
         val = args.get(key)
-        if val and is_native_source_path(str(val)):
+        if val and predicate(str(val)):
             return True
     return False
+
+
+def mutation_args_touch_native(tool_args: Any) -> bool:
+    """Return True when edit/write args target a native source file."""
+    return _mutation_args_touch_suffixes(
+        tool_args, predicate=is_native_source_path
+    )
+
+
+def mutation_args_touch_python(tool_args: Any) -> bool:
+    """Return True when edit/write args target a Python source file."""
+    return _mutation_args_touch_suffixes(
+        tool_args, predicate=is_python_source_path
+    )
 
 
 def looks_like_native_build_command(command: str) -> bool:
@@ -417,17 +455,46 @@ def looks_like_native_build_command(command: str) -> bool:
     return False
 
 
+def looks_like_python_suite_command(command: str) -> bool:
+    """Return True when *command* runs a real Python test suite.
+
+    `compileall`, bare `python -c`, and typecheck-only commands do not count.
+    """
+    if not command or not str(command).strip():
+        return False
+    lower = str(command).lower()
+    if "compileall" in lower:
+        return False
+    if re.search(r"\bpytest\b", lower) or re.search(r"\bpy\.test\b", lower):
+        return True
+    if re.search(r"python(?:3(?:\.\d+)?)?\s+-m\s+pytest\b", lower):
+        return True
+    if re.search(r"python(?:3(?:\.\d+)?)?\s+-m\s+unittest\b", lower):
+        return True
+    # CPython's own regrtest driver.
+    if re.search(r"(?:\./)?python(?:3(?:\.\d+)?)?\s+-m\s+test\b", lower):
+        return True
+    if re.search(r"\btox\b", lower) or re.search(r"\bnox\b", lower):
+        return True
+    return False
+
+
 def verify_command_qualifies_for_completion(
     command: str,
     *,
     native_mutated: bool,
     success: bool,
+    python_mutated: bool = False,
 ) -> bool:
     """Return True when a successful verify command completes the verify gate."""
     if not success or not looks_like_verify_command(command):
         return False
     if native_mutated and not looks_like_native_build_command(command):
         return False
+    # Pure-Python edits: require a real suite, not compileall / python -c.
+    if python_mutated and not native_mutated:
+        if not looks_like_python_suite_command(command):
+            return False
     return True
 
 
@@ -653,6 +720,8 @@ def next_implement_continuation(
     missing_symbols: tuple[str, ...] | list[str] = (),
     native_mutated: bool = False,
     native_build_verified: bool = False,
+    python_mutated: bool = False,
+    python_suite_verified: bool = False,
 ) -> str | None:
     """Pick the next headless continuation nudge, or None if done."""
     if not looks_like_implement_task(user_text):
@@ -667,6 +736,8 @@ def next_implement_continuation(
         return prompt_symbol_nudge(tuple(missing_symbols))
     if native_mutated and not native_build_verified:
         return NATIVE_BUILD_NUDGE
+    if python_mutated and not native_mutated and not python_suite_verified:
+        return PYTHON_SUITE_NUDGE
     if not verify_succeeded:
         if verify_attempted:
             return VERIFY_FAILED_NUDGE
@@ -700,6 +771,7 @@ __all__ = [
     "INTEGRATION_NUDGE",
     "NATIVE_BUILD_NUDGE",
     "PROMPT_SYMBOL_NUDGE_TEMPLATE",
+    "PYTHON_SUITE_NUDGE",
     "SHALLOW_EDIT_NUDGE",
     "STALL_CONTINUATION_NUDGE",
     "SUBMIT_NUDGE",
@@ -712,14 +784,17 @@ __all__ = [
     "extract_bash_command_from_result",
     "extract_required_prompt_symbols",
     "is_native_source_path",
+    "is_python_source_path",
     "is_shallow_signature_edit",
     "looks_like_git_archaeology",
     "looks_like_implement_task",
     "looks_like_native_build_command",
+    "looks_like_python_suite_command",
     "looks_like_submit_command",
     "looks_like_verify_command",
     "missing_prompt_symbols",
     "mutation_args_touch_native",
+    "mutation_args_touch_python",
     "mutation_text_from_args",
     "next_implement_continuation",
     "prompt_symbol_nudge",

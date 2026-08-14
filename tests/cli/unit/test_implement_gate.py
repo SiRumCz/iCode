@@ -105,6 +105,83 @@ def test_native_build_required_for_completion() -> None:
     )
 
 
+def test_python_suite_required_for_pure_python_edits() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        PYTHON_SUITE_NUDGE,
+        is_python_source_path,
+        looks_like_python_suite_command,
+        mutation_args_touch_python,
+    )
+
+    assert is_python_source_path("aiomonitor/monitor.py")
+    assert not is_python_source_path("Objects/foo.c")
+    assert mutation_args_touch_python(
+        {"file_path": "aiomonitor/types.py", "content": "x = 1\n"}
+    )
+    assert looks_like_python_suite_command("pytest -q tests/test_snapshot.py")
+    assert looks_like_python_suite_command("python -m pytest -q")
+    assert looks_like_python_suite_command("python3 -m unittest discover")
+    assert not looks_like_python_suite_command("python -m compileall aiomonitor")
+    assert not looks_like_python_suite_command('python -c "import aiomonitor"')
+
+    assert (
+        verify_command_qualifies_for_completion(
+            "python -m compileall aiomonitor",
+            native_mutated=False,
+            python_mutated=True,
+            success=True,
+        )
+        is False
+    )
+    assert (
+        verify_command_qualifies_for_completion(
+            "pytest -q tests/test_snapshot.py",
+            native_mutated=False,
+            python_mutated=True,
+            success=True,
+        )
+        is True
+    )
+    # Native+Python: native build still qualifies completion.
+    assert (
+        verify_command_qualifies_for_completion(
+            "make -j2",
+            native_mutated=True,
+            python_mutated=True,
+            success=True,
+        )
+        is True
+    )
+
+    text = "Implement snapshot CLI then run lolbench-submit"
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=False,
+            python_mutated=True,
+            python_suite_verified=False,
+        )
+        == PYTHON_SUITE_NUDGE
+    )
+    assert (
+        next_implement_continuation(
+            user_text=text,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
+            submit_attempted=False,
+            shallow_only=False,
+            python_mutated=True,
+            python_suite_verified=True,
+        )
+        == SUBMIT_NUDGE
+    )
+
+
 def test_native_build_nudge_before_submit() -> None:
     text = "Implement PEP 696 then run lolbench-submit"
     assert (
