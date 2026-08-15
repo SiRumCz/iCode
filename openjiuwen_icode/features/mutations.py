@@ -25,6 +25,53 @@ MUTATING_TOOLS = frozenset(
     }
 )
 
+_MUTATION_FAILURE_MARKERS = (
+    "error applying patch",
+    "could not find",
+    "no such file or directory",
+    "old_string not found",
+    "failed to edit",
+    "permission denied",
+    "not unique",
+    "multiple matches",
+    "string not found",
+)
+
+
+def mutating_tool_applied(
+    tool_name: str,
+    tool_result: Any,
+    *,
+    tool_success: bool | None = None,
+) -> bool:
+    """Return True when a mutating tool likely changed the workspace."""
+    if str(tool_name or "") not in MUTATING_TOOLS:
+        return False
+    if tool_success is False:
+        return False
+    text = str(tool_result or "")
+    lower = text.lower()
+    if any(marker in lower for marker in _MUTATION_FAILURE_MARKERS):
+        return False
+    if tool_success is True:
+        return True
+    return bool(text.strip())
+
+
+def tool_result_payload(tool_result: Any) -> tuple[Any, bool | None]:
+    """Extract result text and explicit success flag from a tool result."""
+    if tool_result is None:
+        return "", None
+    success = getattr(tool_result, "success", None)
+    if success is None and isinstance(tool_result, dict):
+        success = tool_result.get("success")
+    content = getattr(tool_result, "content", None)
+    if content is None and isinstance(tool_result, dict):
+        content = tool_result.get("content")
+    if content is None:
+        content = tool_result
+    return content, success if success is None else bool(success)
+
 
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
@@ -341,4 +388,6 @@ __all__ = [
     "MUTATING_TOOLS",
     "MutationTracker",
     "TurnMutations",
+    "mutating_tool_applied",
+    "tool_result_payload",
 ]

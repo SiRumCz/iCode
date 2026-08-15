@@ -14,6 +14,7 @@ from openjiuwen_icode.features.mutations import (
     _file_hash,
     _git_checkout_file,
     _git_diff_file,
+    mutating_tool_applied,
 )
 
 
@@ -54,6 +55,20 @@ def test_has_workspace_changes(tmp_path: Path) -> None:
     target.write_text("v2\n", encoding="utf-8")
     tracker.refresh_after_hashes()
     assert tracker.has_workspace_changes() is True
+
+
+def test_mutating_tool_applied() -> None:
+    assert mutating_tool_applied(
+        "edit_file",
+        "Applied patch",
+        tool_success=True,
+    )
+    assert not mutating_tool_applied(
+        "edit_file",
+        "old_string not found",
+        tool_success=False,
+    )
+    assert not mutating_tool_applied("grep", "matches")
 
 
 def test_ignores_non_mutating_tools(tmp_path: Path) -> None:

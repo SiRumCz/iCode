@@ -27,7 +27,11 @@ from openjiuwen_icode.features.implement_gate import (
     tool_is_edit_existing,
     verify_command_qualifies_for_completion,
 )
-from openjiuwen_icode.features.mutations import MUTATING_TOOLS
+from openjiuwen_icode.features.mutations import (
+    MUTATING_TOOLS,
+    mutating_tool_applied,
+    tool_result_payload,
+)
 
 _SECTION = "implement_completeness"
 _PRIORITY = 97
@@ -211,6 +215,15 @@ class ImplementCompletenessRail(DeepAgentRail):
         if not name:
             return
         if name in MUTATING_TOOLS:
+            if tool_result is None:
+                applied = True
+            else:
+                result_payload, tool_success = tool_result_payload(tool_result)
+                applied = mutating_tool_applied(
+                    name, result_payload, tool_success=tool_success
+                )
+            if not applied:
+                return
             self._mutated = True
             self._verify_succeeded = False
             if mutation_args_touch_native(args):

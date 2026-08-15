@@ -15,7 +15,11 @@ from openjiuwen_icode.features.implement_gate import (
     looks_like_explore_bash,
     looks_like_implement_task,
 )
-from openjiuwen_icode.features.mutations import MUTATING_TOOLS
+from openjiuwen_icode.features.mutations import (
+    MUTATING_TOOLS,
+    mutating_tool_applied,
+    tool_result_payload,
+)
 
 _EXPLORE_TOOLS = frozenset(
     {
@@ -78,6 +82,7 @@ class CodeEditNudgeRail(DeepAgentRail):
         explore_budget: int = 3,
         *,
         explore_abort_cap: int | None = None,
+        model_abort_cap: int | None = None,
     ) -> None:
         super().__init__()
         self.explore_budget = max(1, int(explore_budget))
@@ -86,8 +91,13 @@ class CodeEditNudgeRail(DeepAgentRail):
             self.explore_budget + 1,
             int(cap if cap is not None else self.explore_budget * 4),
         )
+        self.model_abort_cap = max(
+            self.explore_budget + 1,
+            int(model_abort_cap if model_abort_cap is not None else 18),
+        )
         self._explore_count = 0
-        self._mutated = False
+        self._workspace_mutated = False
+        self._model_rounds = 0
         self._aborted_for_explore = False
         self._user_text = ""
         self.system_prompt_builder = None
@@ -100,15 +110,19 @@ class CodeEditNudgeRail(DeepAgentRail):
         )
         # Reset per agent construction (one turn / session factory).
         self._explore_count = 0
-        self._mutated = False
+        self._workspace_mutated = False
+        self._model_rounds = 0
         self._aborted_for_explore = False
         self._user_text = ""
 
     async def _maybe_abort_explore_only(self, ctx: AgentCallbackContext) -> None:
         if (
-            self._mutated
+            self._workspace_mutated
             or self._aborted_for_explore
-            or self._explore_count < self.explore_abort_cap
+            or (
+                self._explore_count < self.explore_abort_cap
+                and self._model_rounds < self.model_abort_cap
+            )
         ):
             return
         if not self._user_text:
@@ -122,6 +136,10 @@ class CodeEditNudgeRail(DeepAgentRail):
         self._aborted_for_explore = True
         await abort()
 
+    async def _count_explore(self, ctx: AgentCallbackContext) -> None:
+        self._explore_count += 1
+        await self._maybe_abort_explore_only(ctx)
+
     async def after_tool_call(self, ctx: AgentCallbackContext) -> None:
         if not self._user_text:
             self._user_text = _user_text_from_ctx(ctx)
@@ -130,21 +148,35 @@ class CodeEditNudgeRail(DeepAgentRail):
         if not name:
             return
         if name in MUTATING_TOOLS:
-            self._mutated = True
+            tool_result = getattr(inputs, "tool_result", None)
+            if tool_result is not None:
+                result_payload, tool_success = tool_result_payload(tool_result)
+                if mutating_tool_applied(
+                    name, result_payload, tool_success=tool_success
+                ):
+                    self._workspace_mutated = True
+                    return
+                await self._count_explore(ctx)
             return
         if name in _EXPLORE_TOOLS:
-            self._explore_count += 1
-            await self._maybe_abort_explore_only(ctx)
+            await self._count_explore(ctx)
             return
-        # Read-only bash (git archaeology, go test/build, grep/cat) burns the
-        # explore budget too — common failure mode on pruned eval checkouts.
         if name == "bash":
             cmd = extract_bash_command(getattr(inputs, "tool_args", None))
-            if looks_like_explore_bash(cmd):
-                self._explore_count += 1
-                await self._maybe_abort_explore_only(ctx)
+            if not self._workspace_mutated or looks_like_explore_bash(cmd):
+                await self._count_explore(ctx)
 
     async def before_model_call(self, ctx: AgentCallbackContext) -> None:
+        self._model_rounds += 1
+        if not self._user_text:
+            self._user_text = _user_text_from_ctx(ctx)
+        if (
+            not self._workspace_mutated
+            and looks_like_implement_task(self._user_text)
+            and self._model_rounds >= self.model_abort_cap
+        ):
+            await self._maybe_abort_explore_only(ctx)
+
         builder = self.system_prompt_builder
         if builder is None:
             return
@@ -152,7 +184,7 @@ class CodeEditNudgeRail(DeepAgentRail):
         if callable(remove):
             remove(_SECTION)
 
-        if self._mutated or self._explore_count < self.explore_budget:
+        if self._workspace_mutated or self._explore_count < self.explore_budget:
             return
 
         lang = getattr(builder, "language", "en") or "en"

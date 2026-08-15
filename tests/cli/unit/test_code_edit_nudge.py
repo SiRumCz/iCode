@@ -95,7 +95,14 @@ async def test_nudge_cleared_after_mutation() -> None:
     )
     await rail.after_tool_call(
         SimpleNamespace(
-            inputs=SimpleNamespace(tool_name="edit_file", tool_args={})
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={},
+                tool_result=SimpleNamespace(
+                    success=True,
+                    content="Applied patch to parser.go",
+                ),
+            )
         )
     )
     await rail.before_model_call(MagicMock())
@@ -123,3 +130,47 @@ async def test_abort_after_explore_cap_on_implement_task() -> None:
     for _ in range(4):
         await rail.after_tool_call(ctx)
     agent.abort.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_edit_still_counts_as_explore() -> None:
+    rail = CodeEditNudgeRail(explore_budget=2, explore_abort_cap=3)
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={"path": "missing.go"},
+                tool_result=SimpleNamespace(
+                    success=False,
+                    content="old_string not found in file",
+                ),
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(inputs=SimpleNamespace(tool_name="grep"))
+    )
+    await rail.before_model_call(MagicMock())
+    assert "code_edit_nudge" in builder.sections
+
+
+@pytest.mark.asyncio
+async def test_all_bash_counts_as_explore_before_mutation() -> None:
+    rail = CodeEditNudgeRail(explore_budget=2)
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    for cmd in ("make -j2", "go run ./cmd"):
+        await rail.after_tool_call(
+            SimpleNamespace(
+                inputs=SimpleNamespace(
+                    tool_name="bash",
+                    tool_args={"command": cmd},
+                )
+            )
+        )
+    await rail.before_model_call(MagicMock())
+    assert "code_edit_nudge" in builder.sections

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 from openjiuwen_icode.agent.config import CLIConfig
@@ -145,6 +146,19 @@ def event_to_dict(event: Event) -> dict[str, Any]:
     return data
 
 
+def _headless_turn_budget_secs(*, auto_approve: bool) -> float | None:
+    """Wall-clock cap so eval harnesses can capture logs before outer timeout."""
+    raw = os.getenv("ICODE_HEADLESS_TURN_BUDGET_SECS")
+    if raw:
+        try:
+            return max(1.0, float(raw))
+        except ValueError:
+            return None
+    if auto_approve:
+        return 5100.0
+    return None
+
+
 async def run_via_bus(
     cfg: CLIConfig | None,
     prompt: str,
@@ -264,12 +278,43 @@ async def run_via_bus(
                     break
 
         consumer = asyncio.create_task(_consume())
-        try:
+
+        async def _drive_turn() -> None:
             await host.start()
             await bus.publish(
                 UserMessage(text=prompt, session_id=sid)
             )
             await consumer
+
+        turn_budget = _headless_turn_budget_secs(auto_approve=auto_approve)
+        try:
+            if turn_budget is not None:
+                await asyncio.wait_for(_drive_turn(), timeout=turn_budget)
+            else:
+                await _drive_turn()
+        except asyncio.TimeoutError:
+            failed = True
+            abort = getattr(host._backend, "abort", None)
+            if callable(abort):
+                try:
+                    await abort()
+                except Exception:  # noqa: BLE001
+                    pass
+            if not consumer.done():
+                consumer.cancel()
+                try:
+                    await consumer
+                except asyncio.CancelledError:
+                    pass
+            await bus.publish(
+                TurnFailed(
+                    error=(
+                        f"headless turn exceeded "
+                        f"{turn_budget:.0f}s wall-clock budget"
+                    ),
+                    session_id=sid,
+                )
+            )
         finally:
             if not consumer.done():
                 consumer.cancel()
