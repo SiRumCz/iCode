@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openjiuwen_icode.rails.code_edit_nudge import CodeEditNudgeRail
+from openjiuwen_icode.rails.code_edit_nudge import (
+    CodeEditNudgeRail,
+    tighten_edit_rails_for_continuation,
+)
 
 
 class _FakeBuilder:
@@ -189,3 +192,14 @@ async def test_all_bash_counts_as_explore_before_mutation() -> None:
         )
     await rail.before_model_call(MagicMock())
     assert "code_edit_nudge" in builder.sections
+
+
+def test_tighten_edit_rails_for_continuation() -> None:
+    rail = CodeEditNudgeRail(explore_budget=3, explore_abort_cap=12)
+    agent = MagicMock()
+    agent.rails = [rail]
+    rail._explore_count = 9
+    tighten_edit_rails_for_continuation(agent)
+    assert rail.explore_budget == 1
+    assert rail.explore_abort_cap <= 5
+    assert rail._explore_count == 0

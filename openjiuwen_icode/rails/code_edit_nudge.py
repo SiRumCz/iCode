@@ -56,20 +56,36 @@ _NUDGE_CN = (
 )
 
 
-def reset_stream_rails(agent: Any) -> None:
-    """Reset per-stream explore counters on coding rails."""
+def _iter_code_edit_rails(agent: Any) -> list["CodeEditNudgeRail"]:
+    """Return CodeEditNudgeRail instances mounted on *agent*."""
     if agent is None:
-        return
+        return []
     rails = getattr(agent, "rails", None)
     if rails is None:
         deep = getattr(agent, "deep_config", None)
         rails = getattr(deep, "rails", None) if deep else None
     if not rails:
-        return
-    for rail in rails:
-        reset = getattr(rail, "reset_stream_state", None)
-        if callable(reset):
-            reset()
+        return []
+    return [rail for rail in rails if isinstance(rail, CodeEditNudgeRail)]
+
+
+def reset_stream_rails(agent: Any) -> None:
+    """Reset per-stream explore counters on coding rails."""
+    for rail in _iter_code_edit_rails(agent):
+        rail.reset_stream_state()
+
+
+def tighten_edit_rails_for_continuation(agent: Any) -> None:
+    """Use a short explore budget on SessionHost continuation streams.
+
+    After a ZERO_MUTATION / WORKTREE nudge the agent should edit immediately,
+    not burn another full explore window on grep/go test loops.
+    """
+    for rail in _iter_code_edit_rails(agent):
+        rail.explore_budget = 1
+        rail.explore_abort_cap = max(3, rail.explore_budget + 2)
+        rail.model_abort_cap = max(6, rail.explore_budget + 4)
+        rail.reset_stream_state()
 
 
 class CodeEditNudgeRail(DeepAgentRail):
@@ -208,4 +224,8 @@ class CodeEditNudgeRail(DeepAgentRail):
         )
 
 
-__all__ = ["CodeEditNudgeRail", "reset_stream_rails"]
+__all__ = [
+    "CodeEditNudgeRail",
+    "reset_stream_rails",
+    "tighten_edit_rails_for_continuation",
+]

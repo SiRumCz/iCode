@@ -232,6 +232,9 @@ async def run_via_bus(
             path = host.workdirs.add(workdir)
             host.workdirs.use(path)
         apply_workdir_to_backend(host._backend, path)
+        bind_mutations = getattr(host, "_bind_mutations", None)
+        if callable(bind_mutations):
+            bind_mutations(sid)
 
     if session_id and host.session_store is not None:
         from openjiuwen_icode.features.session_resume import (

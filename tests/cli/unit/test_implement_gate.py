@@ -17,6 +17,7 @@ from openjiuwen_icode.features.implement_gate import (
     extract_bash_command_from_result,
     extract_required_prompt_symbols,
     is_headless_continuation_nudge,
+    is_wrapped_implement_continuation_query,
     is_native_source_path,
     is_shallow_signature_edit,
     looks_like_implement_task,
@@ -70,6 +71,8 @@ def test_wrap_implement_continuation_query_includes_original_task() -> None:
     assert ZERO_MUTATION_NUDGE in wrapped
     assert original in wrapped
     assert wrap_implement_continuation_query(original, original) == original
+    assert is_wrapped_implement_continuation_query(wrapped)
+    assert not is_wrapped_implement_continuation_query(original)
 
 
 def test_verify_and_submit_command_detection() -> None:

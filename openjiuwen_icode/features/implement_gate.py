@@ -242,6 +242,8 @@ ZERO_MUTATION_NUDGE = (
     "You analyzed the codebase but did not modify any files. "
     "The user asked you to implement changes. Call `edit_file` or "
     "`write_file` now to apply a concrete patch in the worktree. "
+    "Do not run another round of grep, git log, go test, or go build "
+    "before the first successful edit. "
     "Do not search git history for an upstream PR — this checkout is often "
     "at a pruned base commit with no solution commits to find. "
     "Do not stop after another design essay. When the patch is in place, "
@@ -385,6 +387,15 @@ def is_headless_continuation_nudge(text: str) -> bool:
     if stripped.startswith("Your patch is missing symbols/APIs the user named:"):
         return True
     return False
+
+
+def is_wrapped_implement_continuation_query(text: str) -> bool:
+    """Return True when *text* is a SessionHost continuation (nudge + original task)."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    head = stripped.split("\n", 1)[0]
+    return is_headless_continuation_nudge(head)
 
 
 def primary_user_task_text(messages_or_ctx: Any) -> str:
@@ -1141,6 +1152,7 @@ __all__ = [
     "extract_required_prompt_symbols",
     "is_go_source_path",
     "is_headless_continuation_nudge",
+    "is_wrapped_implement_continuation_query",
     "is_native_source_path",
     "is_python_source_path",
     "is_shallow_signature_edit",

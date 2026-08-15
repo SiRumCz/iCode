@@ -666,12 +666,21 @@ class LocalBackend:
         from openjiuwen_icode.host.workdirs import (
             apply_pending_workdir_cwd,
         )
-        from openjiuwen_icode.rails.code_edit_nudge import reset_stream_rails
+        from openjiuwen_icode.features.implement_gate import (
+            is_wrapped_implement_continuation_query,
+        )
+        from openjiuwen_icode.rails.code_edit_nudge import (
+            reset_stream_rails,
+            tighten_edit_rails_for_continuation,
+        )
 
         apply_pending_workdir_cwd(self)
         await self._load_runtime_extensions()
         sid = session_id or self._session_id
         attempt = {"n": 0}
+        continuation_retry = isinstance(query, str) and (
+            is_wrapped_implement_continuation_query(query)
+        )
         # Prefer an edit-now nudge when the original query is an implement task
         # so mid-stream stall retries do not resume as more archaeology.
         stall_nudge = (
@@ -682,7 +691,10 @@ class LocalBackend:
 
         def _open() -> AsyncIterator[Any]:
             attempt["n"] += 1
-            reset_stream_rails(self.agent)
+            if continuation_retry:
+                tighten_edit_rails_for_continuation(self.agent)
+            else:
+                reset_stream_rails(self.agent)
             payload_query: Any = query
             if attempt["n"] > 1 and isinstance(query, str):
                 payload_query = stall_nudge

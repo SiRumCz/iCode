@@ -293,10 +293,14 @@ class SessionHost:
             self._mutations.begin_turn(sid)
         try:
             from openjiuwen_icode.features.implement_gate import (
+                INCOMPLETE_IMPLEMENT_ERROR,
+                WORKTREE_NUDGE,
+                ZERO_MUTATION_NUDGE,
                 bash_result_succeeded,
                 edit_args_look_shallow,
                 extract_bash_command,
                 extract_bash_command_from_result,
+                looks_like_implement_task,
                 looks_like_native_build_command,
                 looks_like_go_suite_command,
                 looks_like_python_suite_command,
@@ -317,9 +321,13 @@ class SessionHost:
                 StreamStallError,
             )
 
+            def _task_text() -> str:
+                return (self._last_user_text or event.text or "").strip()
+
             def _continuation_nudge() -> str | None:
+                user_text = _task_text()
                 missing = missing_prompt_symbols(
-                    user_text=event.text,
+                    user_text=user_text,
                     mutation_blob="\n".join(mutation_blob_parts),
                 )
                 workspace_mutated = (
@@ -327,7 +335,7 @@ class SessionHost:
                     and self._mutations.has_workspace_changes()
                 )
                 return next_implement_continuation(
-                    user_text=event.text,
+                    user_text=user_text,
                     mutate_attempted=mutate_attempted,
                     verify_attempted=verify_attempted,
                     verify_succeeded=verify_succeeded,
@@ -440,7 +448,7 @@ class SessionHost:
                                                     python_mutated=python_mutated,
                                                     go_mutated=go_mutated,
                                                     success=True,
-                                                    user_text=event.text,
+                                                    user_text=_task_text(),
                                                 )
                                             ):
                                                 verify_succeeded = True
@@ -474,7 +482,7 @@ class SessionHost:
                         if nudge is not None:
                             continuation_attempts += 1
                             query = wrap_implement_continuation_query(
-                                event.text, nudge
+                                _task_text(), nudge
                             )
                             continue
                     raise
@@ -499,17 +507,36 @@ class SessionHost:
                 if nudge is not None and continuation_attempts < max_continuations:
                     continuation_attempts += 1
                     query = wrap_implement_continuation_query(
-                        event.text, nudge
+                        _task_text(), nudge
                     )
                     continue
+
+                # Fail closed: never finish headless implement turns with an
+                # empty worktree (explore-only loops can otherwise exit cleanly
+                # and leave eval adapters with an empty model.patch).
+                task_text = _task_text()
+                if (
+                    self._auto_approve
+                    and looks_like_implement_task(task_text)
+                    and (
+                        self._mutations is None
+                        or not self._mutations.has_workspace_changes()
+                    )
+                ):
+                    forced = (
+                        WORKTREE_NUDGE if mutate_attempted else ZERO_MUTATION_NUDGE
+                    )
+                    if continuation_attempts < max_continuations:
+                        continuation_attempts += 1
+                        query = wrap_implement_continuation_query(
+                            task_text, forced
+                        )
+                        continue
+                    raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
 
                 # Fail closed: do not report success with an empty patch /
                 # explore-only trajectory on implement tasks.
                 if nudge is not None and self._auto_approve:
-                    from openjiuwen_icode.features.implement_gate import (
-                        INCOMPLETE_IMPLEMENT_ERROR,
-                    )
-
                     raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
 
                 break
