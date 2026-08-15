@@ -418,6 +418,82 @@ async def test_go_test_clears_nudge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_typescript_edit_requires_suite_before_clearing_nudge() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={
+                    "file_path": "src/container.ts",
+                    "old_string": "old",
+                    "new_string": "async initialize() {}\n",
+                },
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "tsc --noEmit"},
+                tool_result=SimpleNamespace(
+                    success=True,
+                    data="Command: tsc --noEmit\nExit Code: 0",
+                ),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" in builder.sections
+
+
+@pytest.mark.asyncio
+async def test_typescript_suite_clears_nudge() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+    rail._user_text = (
+        "Add async container initialization with initializer initialize initialize."
+    )
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={
+                    "file_path": "src/container.ts",
+                    "old_string": "old",
+                    "new_string": "async initialize() {}\n",
+                },
+            )
+        )
+    )
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={
+                    "command": "npm test -- async-initialization"
+                },
+                tool_result=SimpleNamespace(
+                    success=True,
+                    data=(
+                        "Command: npm test -- async-initialization\n"
+                        "Exit Code: 0"
+                    ),
+                ),
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" not in builder.sections
+
+
+@pytest.mark.asyncio
 async def test_real_edit_without_verify_still_nudges() -> None:
     rail = ImplementCompletenessRail()
     builder = _FakeBuilder()

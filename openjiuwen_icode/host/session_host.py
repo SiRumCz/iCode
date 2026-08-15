@@ -284,6 +284,8 @@ class SessionHost:
         python_suite_verified = False
         go_mutated = False
         go_suite_verified = False
+        typescript_mutated = False
+        typescript_suite_verified = False
         mutation_blob_parts: list[str] = []
         pending_mutation_args: dict[str, Any] = {}
         continuation_attempts = 0
@@ -305,12 +307,14 @@ class SessionHost:
                 looks_like_native_build_command,
                 looks_like_go_suite_command,
                 looks_like_python_suite_command,
+                looks_like_typescript_suite_command,
                 looks_like_submit_command,
                 looks_like_verify_command,
                 missing_prompt_symbols,
                 mutation_args_touch_go,
                 mutation_args_touch_native,
                 mutation_args_touch_python,
+                mutation_args_touch_typescript,
                 mutation_text_from_args,
                 next_implement_continuation,
                 tool_is_edit_existing,
@@ -355,6 +359,8 @@ class SessionHost:
                     python_suite_verified=python_suite_verified,
                     go_mutated=go_mutated,
                     go_suite_verified=go_suite_verified,
+                    typescript_mutated=typescript_mutated,
+                    typescript_suite_verified=typescript_suite_verified,
                 )
 
             await self._bus.publish(
@@ -427,6 +433,9 @@ class SessionHost:
                                             if mutation_args_touch_go(args):
                                                 go_mutated = True
                                                 go_suite_verified = False
+                                            if mutation_args_touch_typescript(args):
+                                                typescript_mutated = True
+                                                typescript_suite_verified = False
                                             if tool_is_edit_existing(ev.tool_name):
                                                 integration_attempted = True
                                             chunk_text = mutation_text_from_args(
@@ -459,6 +468,10 @@ class SessionHost:
                                                 python_suite_verified = True
                                             if looks_like_go_suite_command(cmd):
                                                 go_suite_verified = True
+                                            if looks_like_typescript_suite_command(
+                                                cmd
+                                            ):
+                                                typescript_suite_verified = True
                                             workspace_ok = (
                                                 self._mutations is not None
                                                 and self._mutations.has_workspace_changes()
@@ -470,6 +483,7 @@ class SessionHost:
                                                     native_mutated=native_mutated,
                                                     python_mutated=python_mutated,
                                                     go_mutated=go_mutated,
+                                                    typescript_mutated=typescript_mutated,
                                                     success=True,
                                                     user_text=_task_text(),
                                                 )

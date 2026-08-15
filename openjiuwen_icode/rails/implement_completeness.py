@@ -19,10 +19,12 @@ from openjiuwen_icode.features.implement_gate import (
     looks_like_native_build_command,
     looks_like_python_suite_command,
     looks_like_submit_command,
+    looks_like_typescript_suite_command,
     looks_like_verify_command,
     mutation_args_touch_go,
     mutation_args_touch_native,
     mutation_args_touch_python,
+    mutation_args_touch_typescript,
     mutation_text_from_args,
     primary_user_task_text,
     tool_is_edit_existing,
@@ -114,6 +116,21 @@ _GO_SUITE_CN = (
     "修失败用例直到通过。不要把编译产物二进制留在仓库里。"
 )
 
+_TS_SUITE_EN = (
+    "## TypeScript tests required\n"
+    "You edited `.ts` / `.tsx` files. `tsc --noEmit`, `npm run build`, and "
+    "lint-only commands do not run tests — call `bash` with targeted "
+    "`npm test`, `jest`, `mocha`, or `vitest` on the tests you touched, "
+    "fix failures, and re-run until they pass."
+)
+
+_TS_SUITE_CN = (
+    "## 需要跑 TypeScript 测试\n"
+    "你修改了 `.ts` / `.tsx` 文件。`tsc --noEmit`、`npm run build` 和 "
+    "仅 lint 的命令不会跑测试——请用 `bash` 对改动测试执行 "
+    "`npm test` / `jest` / `mocha` / `vitest`，修失败用例直到通过。"
+)
+
 _VERIFY_EN = (
     "## Verify reminder\n"
     "You already modified files. Before finishing, run a compile or "
@@ -159,6 +176,8 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._python_suite_verified = False
         self._go_mutated = False
         self._go_suite_verified = False
+        self._typescript_mutated = False
+        self._typescript_suite_verified = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -180,6 +199,8 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._python_suite_verified = False
         self._go_mutated = False
         self._go_suite_verified = False
+        self._typescript_mutated = False
+        self._typescript_suite_verified = False
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -215,6 +236,9 @@ class ImplementCompletenessRail(DeepAgentRail):
             if mutation_args_touch_go(args):
                 self._go_mutated = True
                 self._go_suite_verified = False
+            if mutation_args_touch_typescript(args):
+                self._typescript_mutated = True
+                self._typescript_suite_verified = False
             if tool_is_edit_existing(name):
                 self._integration_attempted = True
             # Keep blob tracking available for future rail use.
@@ -245,11 +269,14 @@ class ImplementCompletenessRail(DeepAgentRail):
                             self._python_suite_verified = True
                         if looks_like_go_suite_command(result_cmd):
                             self._go_suite_verified = True
+                        if looks_like_typescript_suite_command(result_cmd):
+                            self._typescript_suite_verified = True
                         if verify_command_qualifies_for_completion(
                             result_cmd,
                             native_mutated=self._native_mutated,
                             python_mutated=self._python_mutated,
                             go_mutated=self._go_mutated,
+                            typescript_mutated=self._typescript_mutated,
                             success=True,
                             user_text=self._user_text,
                         ):
@@ -287,6 +314,11 @@ class ImplementCompletenessRail(DeepAgentRail):
                 or self._native_mutated
                 or self._go_suite_verified
             )
+            and (
+                not self._typescript_mutated
+                or self._native_mutated
+                or self._typescript_suite_verified
+            )
         ):
             return
 
@@ -318,6 +350,17 @@ class ImplementCompletenessRail(DeepAgentRail):
             content = {
                 "en": _GO_SUITE_EN,
                 "cn": _GO_SUITE_CN,
+                lang: text,
+            }
+        elif (
+            self._typescript_mutated
+            and not self._native_mutated
+            and not self._typescript_suite_verified
+        ):
+            text = _TS_SUITE_CN if zh else _TS_SUITE_EN
+            content = {
+                "en": _TS_SUITE_EN,
+                "cn": _TS_SUITE_CN,
                 lang: text,
             }
         elif (

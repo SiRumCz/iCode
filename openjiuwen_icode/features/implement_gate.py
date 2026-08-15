@@ -79,6 +79,8 @@ _PYTHON_SOURCE_SUFFIXES = (".py",)
 
 _GO_SOURCE_SUFFIXES = (".go",)
 
+_TYPESCRIPT_SOURCE_SUFFIXES = (".ts", ".tsx")
+
 _SUBMIT_HINTS = (
     "lolbench-submit",
     "solution.patch",
@@ -358,6 +360,15 @@ GO_SUITE_NUDGE = (
     "`./abs`) in the repo — use `/tmp` or remove them before finishing."
 )
 
+TS_SUITE_NUDGE = (
+    "You edited TypeScript sources but have not run a real test suite. "
+    "`tsc --noEmit`, `npm run build`, or typecheck-only commands are not "
+    "enough. Call `bash` now with targeted `npm test`, `jest`, `mocha`, or "
+    "`vitest` on the tests you touched (for example "
+    "`npm test -- async-initialization`), fix failures, and re-run until "
+    "they pass before finishing."
+)
+
 
 def _message_text(msg: Any) -> str:
     """Extract plain text from a chat message object or dict."""
@@ -393,6 +404,7 @@ def is_headless_continuation_nudge(text: str) -> bool:
         NATIVE_BUILD_NUDGE,
         PYTHON_SUITE_NUDGE,
         GO_SUITE_NUDGE,
+        TS_SUITE_NUDGE,
     ):
         if stripped == marker or stripped.startswith(marker[:48]):
             return True
@@ -547,6 +559,14 @@ def is_go_source_path(path: str) -> bool:
     return lower.endswith(_GO_SOURCE_SUFFIXES)
 
 
+def is_typescript_source_path(path: str) -> bool:
+    """Return True when *path* looks like a TypeScript source file."""
+    if not path or not str(path).strip():
+        return False
+    lower = str(path).lower().split("?", 1)[0]
+    return lower.endswith(_TYPESCRIPT_SOURCE_SUFFIXES)
+
+
 def _mutation_args_touch_suffixes(
     tool_args: Any,
     *,
@@ -585,6 +605,13 @@ def mutation_args_touch_go(tool_args: Any) -> bool:
     """Return True when edit/write args target a Go source file."""
     return _mutation_args_touch_suffixes(
         tool_args, predicate=is_go_source_path
+    )
+
+
+def mutation_args_touch_typescript(tool_args: Any) -> bool:
+    """Return True when edit/write args target a TypeScript source file."""
+    return _mutation_args_touch_suffixes(
+        tool_args, predicate=is_typescript_source_path
     )
 
 
@@ -641,6 +668,43 @@ def looks_like_go_suite_command(command: str) -> bool:
     return bool(re.search(r"\bgo\s+test\b", lower))
 
 
+def looks_like_typescript_suite_command(command: str) -> bool:
+    """Return True when *command* runs a JS/TS test suite.
+
+    ``tsc --noEmit``, ``npm run build``, and lint-only commands do not count.
+    """
+    if not command or not str(command).strip():
+        return False
+    lower = str(command).lower()
+    if re.search(r"\btsc\b", lower) and "test" not in lower:
+        return False
+    if re.search(r"\bnpm\s+run\s+build\b", lower):
+        return False
+    if re.search(r"\bnpm\s+run\s+lint\b", lower):
+        return False
+    suite = (
+        "npm test",
+        "npm run test",
+        "pnpm test",
+        "pnpm run test",
+        "yarn test",
+        "yarn run test",
+        "npx jest",
+        "npx mocha",
+        "npx vitest",
+        "nx test",
+    )
+    if any(tok in lower for tok in suite):
+        return True
+    if re.search(r"\bjest\b", lower):
+        return True
+    if re.search(r"\bmocha\b", lower):
+        return True
+    if re.search(r"\bvitest\b", lower):
+        return True
+    return False
+
+
 def verify_command_qualifies_for_completion(
     command: str,
     *,
@@ -648,6 +712,7 @@ def verify_command_qualifies_for_completion(
     success: bool,
     python_mutated: bool = False,
     go_mutated: bool = False,
+    typescript_mutated: bool = False,
     user_text: str = "",
 ) -> bool:
     """Return True when a successful verify command completes the verify gate."""
@@ -666,6 +731,14 @@ def verify_command_qualifies_for_completion(
         if not looks_like_go_suite_command(command):
             return False
         if user_text and not go_command_matches_task_scope(user_text, command):
+            return False
+    # Pure-TypeScript edits: require a real suite, not tsc/build alone.
+    if typescript_mutated and not native_mutated:
+        if not looks_like_typescript_suite_command(command):
+            return False
+        if user_text and not typescript_command_matches_task_scope(
+            user_text, command
+        ):
             return False
     return True
 
@@ -868,7 +941,40 @@ def _keyword_in_command(keyword: str, command_lower: str) -> bool:
         return True
     if f"{keyword}s" in command_lower:
         return True
+    # async-initialization ↔ initialize / initializer / initialization
+    if len(keyword) >= 6:
+        root = keyword[:6]
+        if root in command_lower:
+            return True
     return False
+
+
+def typescript_command_matches_task_scope(user_text: str, command: str) -> bool:
+    """Return True when a targeted JS/TS test run matches the task feature area."""
+    if not user_text or not command or not looks_like_typescript_suite_command(
+        command
+    ):
+        return True
+    stem_keywords = _shared_api_stems(user_text)
+    repeated_keywords = _repeated_task_keywords(user_text)
+    keywords = stem_keywords | repeated_keywords
+    if not keywords:
+        return True
+    lower = str(command).lower()
+    match = re.search(r"\b(?:-t|--testNamePattern=)(['\"]?)([\w.-]+)\1", lower)
+    if match:
+        expr = match.group(2)
+        return any(_keyword_in_command(kw, expr) for kw in keywords)
+    if re.search(r"__tests__/[\w./-]+\.test\.(?:ts|tsx|js)", lower):
+        scoped = stem_keywords or repeated_keywords
+        return any(_keyword_in_command(kw, lower) for kw in scoped)
+    if re.search(r"\.test\.(?:ts|tsx|js)\b", lower):
+        scoped = stem_keywords or repeated_keywords
+        return any(_keyword_in_command(kw, lower) for kw in scoped)
+    if re.search(r"\b(?:describe|it)\(['\"][^'\"]+['\"]", lower):
+        return any(_keyword_in_command(kw, lower) for kw in keywords)
+    # Bare repo-wide npm test against an unchanged base is not enough.
+    return any(_keyword_in_command(kw, lower) for kw in keywords)
 
 
 def go_command_matches_task_scope(user_text: str, command: str) -> bool:
@@ -1065,6 +1171,8 @@ def next_implement_continuation(
     python_suite_verified: bool = False,
     go_mutated: bool = False,
     go_suite_verified: bool = False,
+    typescript_mutated: bool = False,
+    typescript_suite_verified: bool = False,
 ) -> str | None:
     """Pick the next headless continuation nudge, or None if done."""
     if not looks_like_implement_task(user_text):
@@ -1083,6 +1191,12 @@ def next_implement_continuation(
         return NATIVE_BUILD_NUDGE
     if go_mutated and not native_mutated and not go_suite_verified:
         return GO_SUITE_NUDGE
+    if (
+        typescript_mutated
+        and not native_mutated
+        and not typescript_suite_verified
+    ):
+        return TS_SUITE_NUDGE
     if python_mutated and not native_mutated and not python_suite_verified:
         return PYTHON_SUITE_NUDGE
     if not verify_succeeded:
@@ -1130,6 +1244,22 @@ def looks_like_explore_bash(command: str) -> bool:
         "go vet",
         "go list",
         "go doc",
+        "npm test",
+        "npm run test",
+        "pnpm test",
+        "pnpm run test",
+        "yarn test",
+        "yarn run test",
+        "npx jest",
+        "npx mocha",
+        "npx vitest",
+        "jest ",
+        "jest\t",
+        "mocha ",
+        "mocha\t",
+        "vitest ",
+        "vitest\t",
+        "nx test",
         "grep ",
         "grep\t",
         "rg ",
@@ -1155,6 +1285,7 @@ def looks_like_explore_bash(command: str) -> bool:
 __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
     "GO_SUITE_NUDGE",
+    "TS_SUITE_NUDGE",
     "INTEGRATION_NUDGE",
     "NATIVE_BUILD_NUDGE",
     "PROMPT_SYMBOL_NUDGE_TEMPLATE",
@@ -1173,6 +1304,7 @@ __all__ = [
     "extract_bash_command_from_result",
     "extract_required_prompt_symbols",
     "is_go_source_path",
+    "is_typescript_source_path",
     "is_headless_continuation_nudge",
     "is_wrapped_implement_continuation_query",
     "is_native_source_path",
@@ -1182,6 +1314,7 @@ __all__ = [
     "looks_like_explore_bash",
     "looks_like_git_archaeology",
     "looks_like_go_suite_command",
+    "looks_like_typescript_suite_command",
     "looks_like_implement_task",
     "looks_like_native_build_command",
     "looks_like_python_suite_command",
@@ -1191,12 +1324,14 @@ __all__ = [
     "mutation_args_touch_go",
     "mutation_args_touch_native",
     "mutation_args_touch_python",
+    "mutation_args_touch_typescript",
     "mutation_text_from_args",
     "next_implement_continuation",
     "original_task_from_query",
     "primary_user_task_text",
     "prompt_symbol_nudge",
     "pytest_command_matches_task_scope",
+    "typescript_command_matches_task_scope",
     "task_requires_submit",
     "tool_is_edit_existing",
     "tool_is_write_file",

@@ -302,6 +302,82 @@ def test_go_suite_required_for_pure_go_edits() -> None:
     )
 
 
+def test_typescript_suite_required_for_pure_ts_edits() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        TS_SUITE_NUDGE,
+        is_typescript_source_path,
+        looks_like_typescript_suite_command,
+        mutation_args_touch_typescript,
+        typescript_command_matches_task_scope,
+    )
+
+    assert is_typescript_source_path("src/container.ts")
+    assert is_typescript_source_path("src/__tests__/async-initialization.test.ts")
+    assert not is_typescript_source_path("package.json")
+    assert mutation_args_touch_typescript(
+        {"file_path": "src/container.ts", "content": "export {}\n"}
+    )
+    assert looks_like_typescript_suite_command("npm test -- async-initialization")
+    assert looks_like_typescript_suite_command("npx jest async-initialization")
+    assert looks_like_typescript_suite_command("yarn test src/__tests__/foo.test.ts")
+    assert not looks_like_typescript_suite_command("tsc --noEmit")
+    assert not looks_like_typescript_suite_command("npm run build")
+
+    assert (
+        verify_command_qualifies_for_completion(
+            "tsc --noEmit",
+            native_mutated=False,
+            typescript_mutated=True,
+            success=True,
+        )
+        is False
+    )
+    assert (
+        verify_command_qualifies_for_completion(
+            "npm test -- async-initialization",
+            native_mutated=False,
+            typescript_mutated=True,
+            success=True,
+        )
+        is True
+    )
+
+    task = (
+        "Add support for asynchronous container initialization with "
+        "initializer() and initialize(). initializer initializer initialize."
+    )
+    assert not typescript_command_matches_task_scope(task, "npm test")
+    assert typescript_command_matches_task_scope(
+        task, "npm test -- async-initialization"
+    )
+    assert (
+        next_implement_continuation(
+            user_text=task,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=False,
+            typescript_mutated=True,
+            typescript_suite_verified=False,
+        )
+        == TS_SUITE_NUDGE
+    )
+    assert (
+        next_implement_continuation(
+            user_text=task,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
+            submit_attempted=False,
+            shallow_only=False,
+            typescript_mutated=True,
+            typescript_suite_verified=True,
+        )
+        is None
+    )
+
+
 def test_native_build_nudge_before_submit() -> None:
     text = "Implement PEP 696 then run lolbench-submit"
     assert (
@@ -407,6 +483,8 @@ def test_looks_like_explore_bash() -> None:
 
     assert looks_like_explore_bash("go test ./... -count=1")
     assert looks_like_explore_bash("go build ./...")
+    assert looks_like_explore_bash("npm test")
+    assert looks_like_explore_bash("npx jest --runInBand")
     assert looks_like_explore_bash("grep -R 'default' parser/")
     assert looks_like_explore_bash("cat vm/vm.go | head")
     assert not looks_like_explore_bash("cargo check -p ruff")

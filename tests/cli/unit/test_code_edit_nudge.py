@@ -29,6 +29,25 @@ class _FakeBuilder:
 
 
 @pytest.mark.asyncio
+async def test_nudge_counts_npm_test_bash() -> None:
+    rail = CodeEditNudgeRail(explore_budget=2)
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+
+    for cmd in ("npm test", "grep -R initializer src/"):
+        await rail.after_tool_call(
+            SimpleNamespace(
+                inputs=SimpleNamespace(
+                    tool_name="bash",
+                    tool_args={"command": cmd},
+                )
+            )
+        )
+    await rail.before_model_call(MagicMock())
+    assert "code_edit_nudge" in builder.sections
+
+
+@pytest.mark.asyncio
 async def test_nudge_counts_go_test_bash() -> None:
     rail = CodeEditNudgeRail(explore_budget=2)
     builder = _FakeBuilder()
