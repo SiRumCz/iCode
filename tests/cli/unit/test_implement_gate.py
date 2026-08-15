@@ -86,6 +86,15 @@ def test_primary_user_task_text_skips_continuation_nudges() -> None:
     assert not is_headless_continuation_nudge(original)
 
 
+def test_primary_user_task_text_extracts_wrapped_continuation() -> None:
+    original = (
+        "Add support for asynchronous initialization of container registrations."
+    )
+    wrapped = wrap_implement_continuation_query(original, ZERO_MUTATION_NUDGE)
+    assert not is_headless_continuation_nudge(wrapped)
+    assert primary_user_task_text([{"role": "user", "content": wrapped}]) == original
+
+
 def test_wrap_implement_continuation_query_includes_original_task() -> None:
     original = "Add typed bindings to Anko."
     wrapped = wrap_implement_continuation_query(original, ZERO_MUTATION_NUDGE)

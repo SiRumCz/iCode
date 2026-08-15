@@ -584,7 +584,25 @@ class SessionHost:
                 if nudge is not None and self._auto_approve:
                     raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
 
+                if (
+                    self._auto_approve
+                    and looks_like_implement_task(_task_text())
+                    and not _workspace_deliverable()
+                ):
+                    raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+
                 break
+
+            task_text = _task_text()
+            if (
+                self._auto_approve
+                and looks_like_implement_task(task_text)
+                and (
+                    self._mutations is None
+                    or not self._mutations.has_deliverable_workspace_changes()
+                )
+            ):
+                raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
 
             if self._store is not None and assistant_parts:
                 self._store.add_message(

@@ -127,7 +127,7 @@ class CodeEditNudgeRail(DeepAgentRail):
         )
         self.model_abort_cap = max(
             self.explore_budget + 1,
-            int(model_abort_cap if model_abort_cap is not None else 18),
+            int(model_abort_cap if model_abort_cap is not None else 10),
         )
         self._explore_count = 0
         self._workspace_mutated = False

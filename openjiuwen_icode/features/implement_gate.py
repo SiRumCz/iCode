@@ -399,6 +399,9 @@ def is_headless_continuation_nudge(text: str) -> bool:
     stripped = (text or "").strip()
     if not stripped:
         return False
+    # Wrapped continuations embed the original task — not a bare nudge.
+    if _ORIGINAL_TASK_MARKER in stripped:
+        return False
     for marker in (
         ZERO_MUTATION_NUDGE,
         WORKTREE_NUDGE,
@@ -455,7 +458,17 @@ def primary_user_task_text(messages_or_ctx: Any) -> str:
         if role != "user":
             continue
         text = _message_text(msg)
-        if not text or is_headless_continuation_nudge(text):
+        if not text:
+            continue
+        if is_wrapped_implement_continuation_query(text):
+            orig = original_task_from_query(text)
+            if orig:
+                if looks_like_implement_task(orig):
+                    return orig
+                if not fallback:
+                    fallback = orig
+            continue
+        if is_headless_continuation_nudge(text):
             continue
         if looks_like_implement_task(text):
             return text
@@ -1279,10 +1292,14 @@ def looks_like_explore_bash(command: str) -> bool:
         "go doc",
         "npm test",
         "npm run test",
+        "npm install",
+        "npm ci",
         "pnpm test",
         "pnpm run test",
+        "pnpm install",
         "yarn test",
         "yarn run test",
+        "yarn install",
         "npx jest",
         "npx mocha",
         "npx vitest",
