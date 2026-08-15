@@ -272,25 +272,7 @@ if n != 1:
 cli_init.write_text(cli_updated, encoding="utf-8")
 print(f"updated pyproject.toml and openjiuwen_icode/__init__.py -> {new}", flush=True)
 
-# Version-only bump of this editable package in uv.lock — do NOT run a
-# full `uv lock` here: that re-fetches the whole graph from the configured
-# index and fails the release when the mirror/network times out.
-# (SDK package ``openjiuwen`` is a git dependency and is left alone.)
-lock = root / "uv.lock"
-if lock.is_file():
-    lock_text = lock.read_text(encoding="utf-8")
-    lock_updated, n = re.subn(
-        r'(name = "openjiuwen-icode"\nversion = ")[^"]+("\nsource = \{ editable = "\." \})',
-        rf'\g<1>{new}\2',
-        lock_text,
-        count=1,
-    )
-    if n != 1:
-        raise SystemExit(
-            "failed to update openjiuwen-icode version in uv.lock"
-        )
-    lock.write_text(lock_updated, encoding="utf-8")
-    print(f"updated uv.lock openjiuwen-icode version -> {new}", flush=True)
+# uv.lock is gitignored — do not rewrite or stage it during release.
 
 # Keep VS Code extension on the same release version.
 ext_pkg = root / "extensions" / "vscode-icode" / "package.json"
@@ -329,9 +311,6 @@ commit_version_bump() {
         cd "$PROJECT_ROOT"
         pyapp_require_cmd git
         git add pyproject.toml openjiuwen_icode/__init__.py
-        if [[ -f uv.lock ]]; then
-            git add uv.lock
-        fi
         if [[ -f extensions/vscode-icode/package.json ]]; then
             git add extensions/vscode-icode/package.json
         fi
@@ -811,7 +790,7 @@ else
     # NEW_VERSION on disk but were never committed.
     if git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
         && ! git -C "$PROJECT_ROOT" diff --quiet -- pyproject.toml \
-            openjiuwen_icode/__init__.py uv.lock \
+            openjiuwen_icode/__init__.py \
             extensions/vscode-icode/package.json \
             extensions/vscode-icode/package-lock.json 2>/dev/null; then
         HEAD_VER="$(
