@@ -17,16 +17,28 @@ _IMPLEMENT_HINTS = (
     "add support",
     "add a",
     "edit ",
+    "edit files",
     "modify ",
     "refactor",
     "patch",
     "write ",
     "create ",
+    "ensure ",
+    "support ",
+    "expected feature",
+    "work on this",
+    "please work on",
+    "execution rules",
+    "repository under evaluation",
     "lolbench-submit",
     "solution.patch",
     "change the code",
     "update the code",
     "make the following",
+)
+
+_ORIGINAL_TASK_MARKER = (
+    "Original task (still applies — implement this in the repo):\n"
 )
 
 _VERIFY_HINTS = (
@@ -396,6 +408,16 @@ def is_wrapped_implement_continuation_query(text: str) -> bool:
         return False
     head = stripped.split("\n", 1)[0]
     return is_headless_continuation_nudge(head)
+
+
+def original_task_from_query(text: str) -> str:
+    """Extract the user task from a plain or wrapped headless query."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return ""
+    if _ORIGINAL_TASK_MARKER in stripped:
+        return stripped.split(_ORIGINAL_TASK_MARKER, 1)[1].strip()
+    return stripped
 
 
 def primary_user_task_text(messages_or_ctx: Any) -> str:
@@ -1171,6 +1193,7 @@ __all__ = [
     "mutation_args_touch_python",
     "mutation_text_from_args",
     "next_implement_continuation",
+    "original_task_from_query",
     "primary_user_task_text",
     "prompt_symbol_nudge",
     "pytest_command_matches_task_scope",

@@ -658,16 +658,16 @@ class LocalBackend:
         from openjiuwen_icode.features.implement_gate import (
             STALL_CONTINUATION_NUDGE,
             ZERO_MUTATION_NUDGE,
+            is_wrapped_implement_continuation_query,
             looks_like_implement_task,
+            original_task_from_query,
+            wrap_implement_continuation_query,
         )
         from openjiuwen_icode.features.stream_stall import (
             iter_with_stall_retry,
         )
         from openjiuwen_icode.host.workdirs import (
             apply_pending_workdir_cwd,
-        )
-        from openjiuwen_icode.features.implement_gate import (
-            is_wrapped_implement_continuation_query,
         )
         from openjiuwen_icode.rails.code_edit_nudge import (
             reset_stream_rails,
@@ -681,11 +681,14 @@ class LocalBackend:
         continuation_retry = isinstance(query, str) and (
             is_wrapped_implement_continuation_query(query)
         )
+        task_for_stall = (
+            original_task_from_query(query) if isinstance(query, str) else ""
+        )
         # Prefer an edit-now nudge when the original query is an implement task
         # so mid-stream stall retries do not resume as more archaeology.
         stall_nudge = (
             ZERO_MUTATION_NUDGE
-            if isinstance(query, str) and looks_like_implement_task(query)
+            if task_for_stall and looks_like_implement_task(task_for_stall)
             else STALL_CONTINUATION_NUDGE
         )
 
@@ -697,7 +700,10 @@ class LocalBackend:
                 reset_stream_rails(self.agent)
             payload_query: Any = query
             if attempt["n"] > 1 and isinstance(query, str):
-                payload_query = stall_nudge
+                payload_query = wrap_implement_continuation_query(
+                    task_for_stall or query,
+                    stall_nudge,
+                )
             return Runner.run_agent_streaming(
                 self.agent,
                 {"query": payload_query},

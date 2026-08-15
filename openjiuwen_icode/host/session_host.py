@@ -285,6 +285,7 @@ class SessionHost:
         go_mutated = False
         go_suite_verified = False
         mutation_blob_parts: list[str] = []
+        pending_mutation_args: dict[str, Any] = {}
         continuation_attempts = 0
         # Allow zero-mutation → shallow → integration → symbols → native →
         # go-suite → python-suite → verify → verify-failed → submit chain.
@@ -316,7 +317,11 @@ class SessionHost:
                 verify_command_qualifies_for_completion,
                 wrap_implement_continuation_query,
             )
-            from openjiuwen_icode.features.mutations import MUTATING_TOOLS
+            from openjiuwen_icode.features.mutations import (
+                MUTATING_TOOLS,
+                mutating_tool_applied,
+                tool_result_payload,
+            )
             from openjiuwen_icode.features.stream_stall import (
                 StreamStallError,
             )
@@ -376,32 +381,10 @@ class SessionHost:
                                     assistant_parts.append(ev.text)
                             if isinstance(ev, ToolCallStart):
                                 if ev.tool_name in MUTATING_TOOLS:
-                                    mutate_attempted = True
-                                    verify_succeeded = False
-                                    if mutation_args_touch_native(
-                                        ev.tool_args
-                                    ):
-                                        native_mutated = True
-                                        native_build_verified = False
-                                    if mutation_args_touch_python(
-                                        ev.tool_args
-                                    ):
-                                        python_mutated = True
-                                        python_suite_verified = False
-                                    if mutation_args_touch_go(ev.tool_args):
-                                        go_mutated = True
-                                        go_suite_verified = False
-                                    if tool_is_edit_existing(ev.tool_name):
-                                        integration_attempted = True
-                                    chunk_text = mutation_text_from_args(
-                                        ev.tool_args
-                                    )
-                                    if chunk_text:
-                                        mutation_blob_parts.append(chunk_text)
-                                    if not edit_args_look_shallow(
-                                        ev.tool_args
-                                    ):
-                                        shallow_only = False
+                                    if ev.tool_call_id:
+                                        pending_mutation_args[ev.tool_call_id] = (
+                                            ev.tool_args
+                                        )
                                 elif ev.tool_name == "bash":
                                     cmd = extract_bash_command(
                                         ev.tool_args
@@ -415,6 +398,46 @@ class SessionHost:
                                         ev.tool_name, ev.tool_args
                                     )
                             if isinstance(ev, ToolCallResult):
+                                if ev.tool_name in MUTATING_TOOLS:
+                                    args = pending_mutation_args.pop(
+                                        ev.tool_call_id, None
+                                    )
+                                    result_payload, parsed_success = (
+                                        tool_result_payload(ev.result)
+                                    )
+                                    tool_success = (
+                                        ev.tool_success
+                                        if ev.tool_success is not None
+                                        else parsed_success
+                                    )
+                                    if mutating_tool_applied(
+                                        ev.tool_name,
+                                        result_payload,
+                                        tool_success=tool_success,
+                                    ):
+                                        mutate_attempted = True
+                                        verify_succeeded = False
+                                        if args is not None:
+                                            if mutation_args_touch_native(args):
+                                                native_mutated = True
+                                                native_build_verified = False
+                                            if mutation_args_touch_python(args):
+                                                python_mutated = True
+                                                python_suite_verified = False
+                                            if mutation_args_touch_go(args):
+                                                go_mutated = True
+                                                go_suite_verified = False
+                                            if tool_is_edit_existing(ev.tool_name):
+                                                integration_attempted = True
+                                            chunk_text = mutation_text_from_args(
+                                                args
+                                            )
+                                            if chunk_text:
+                                                mutation_blob_parts.append(
+                                                    chunk_text
+                                                )
+                                            if not edit_args_look_shallow(args):
+                                                shallow_only = False
                                 if ev.tool_name == "bash":
                                     cmd = extract_bash_command_from_result(
                                         ev.result
@@ -437,8 +460,8 @@ class SessionHost:
                                             if looks_like_go_suite_command(cmd):
                                                 go_suite_verified = True
                                             workspace_ok = (
-                                                self._mutations is None
-                                                or self._mutations.has_workspace_changes()
+                                                self._mutations is not None
+                                                and self._mutations.has_workspace_changes()
                                             )
                                             if (
                                                 workspace_ok

@@ -26,6 +26,7 @@ from openjiuwen_icode.features.implement_gate import (
     looks_like_verify_command,
     mutation_args_touch_native,
     next_implement_continuation,
+    original_task_from_query,
     primary_user_task_text,
     pytest_command_matches_task_scope,
     task_requires_submit,
@@ -49,6 +50,26 @@ def test_looks_like_implement_task_negative() -> None:
     assert not looks_like_implement_task("What is Ruff?")
     assert not looks_like_implement_task("")
     assert not looks_like_implement_task("Explain how --config works")
+
+
+def test_looks_like_implement_task_harbor_spec() -> None:
+    assert looks_like_implement_task(
+        "Expected Feature:\nSupport $ref resolution in dependentSchemas."
+    )
+    assert looks_like_implement_task(
+        "Ensure enum deep equality with object/array values"
+    )
+    assert looks_like_implement_task(
+        "IMPORTANT: Please work on this in a new branch from main."
+    )
+
+
+def test_original_task_from_query() -> None:
+    original = "Add typed bindings to Anko."
+    wrapped = wrap_implement_continuation_query(original, ZERO_MUTATION_NUDGE)
+    assert original_task_from_query(original) == original
+    assert original_task_from_query(wrapped) == original
+    assert original_task_from_query("") == ""
 
 
 def test_primary_user_task_text_skips_continuation_nudges() -> None:
