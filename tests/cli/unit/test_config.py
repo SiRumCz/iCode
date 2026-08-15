@@ -329,3 +329,39 @@ class TestLoadConfig:
         )
         cfg = load_config()
         assert cfg.max_iterations == 15
+
+    def test_stream_iteration_cap(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        """Very high maxIterations is capped per stream for headless continuations."""
+        p = tmp_path / "settings.json"
+        p.write_text('{"apiKey": "k", "maxIterations": 500}')
+        monkeypatch.setattr(
+            "openjiuwen_icode.agent.config.SETTINGS_PATH",
+            p,
+        )
+        monkeypatch.delenv("OPENJIUWEN_API_KEY", raising=False)
+        monkeypatch.delenv("ICODE_MAX_ITERATIONS", raising=False)
+        monkeypatch.delenv("OPENJIUWEN_MAX_ITERATIONS", raising=False)
+        monkeypatch.delenv("ICODE_STREAM_ITERATION_CAP", raising=False)
+        cfg = load_config()
+        assert cfg.max_iterations == 50
+
+    def test_stream_iteration_cap_env_override(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        p = tmp_path / "settings.json"
+        p.write_text('{"apiKey": "k", "maxIterations": 500}')
+        monkeypatch.setattr(
+            "openjiuwen_icode.agent.config.SETTINGS_PATH",
+            p,
+        )
+        monkeypatch.delenv("OPENJIUWEN_API_KEY", raising=False)
+        monkeypatch.setenv("ICODE_MAX_ITERATIONS", "500")
+        monkeypatch.setenv("ICODE_STREAM_ITERATION_CAP", "80")
+        cfg = load_config()
+        assert cfg.max_iterations == 80

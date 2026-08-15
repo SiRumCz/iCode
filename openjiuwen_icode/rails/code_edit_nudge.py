@@ -13,6 +13,7 @@ from openjiuwen.harness.rails.base import DeepAgentRail
 from openjiuwen_icode.features.implement_gate import (
     extract_bash_command,
     looks_like_explore_bash,
+    looks_like_implement_task,
 )
 from openjiuwen_icode.features.mutations import MUTATING_TOOLS
 
@@ -50,16 +51,45 @@ _NUDGE_CN = (
 )
 
 
+def _user_text_from_ctx(ctx: Any) -> str:
+    """Best-effort extract of the latest user task text from callback ctx."""
+    messages = getattr(getattr(ctx, "inputs", None), "messages", None) or []
+    for msg in reversed(list(messages)):
+        role = getattr(msg, "role", None)
+        if role is None and isinstance(msg, dict):
+            role = msg.get("role")
+        if role != "user":
+            continue
+        content = getattr(msg, "content", None)
+        if content is None and isinstance(msg, dict):
+            content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+    return ""
+
+
 class CodeEditNudgeRail(DeepAgentRail):
     """Inject an edit reminder after *explore_budget* explore-only tools."""
 
     priority = 85
 
-    def __init__(self, explore_budget: int = 5) -> None:
+    def __init__(
+        self,
+        explore_budget: int = 3,
+        *,
+        explore_abort_cap: int | None = None,
+    ) -> None:
         super().__init__()
         self.explore_budget = max(1, int(explore_budget))
+        cap = explore_abort_cap
+        self.explore_abort_cap = max(
+            self.explore_budget + 1,
+            int(cap if cap is not None else self.explore_budget * 4),
+        )
         self._explore_count = 0
         self._mutated = False
+        self._aborted_for_explore = False
+        self._user_text = ""
         self.system_prompt_builder = None
         self._agent: Any = None
 
@@ -71,8 +101,30 @@ class CodeEditNudgeRail(DeepAgentRail):
         # Reset per agent construction (one turn / session factory).
         self._explore_count = 0
         self._mutated = False
+        self._aborted_for_explore = False
+        self._user_text = ""
+
+    async def _maybe_abort_explore_only(self, ctx: AgentCallbackContext) -> None:
+        if (
+            self._mutated
+            or self._aborted_for_explore
+            or self._explore_count < self.explore_abort_cap
+        ):
+            return
+        if not self._user_text:
+            self._user_text = _user_text_from_ctx(ctx)
+        if not looks_like_implement_task(self._user_text):
+            return
+        agent = self._agent
+        abort = getattr(agent, "abort", None) if agent is not None else None
+        if not callable(abort):
+            return
+        self._aborted_for_explore = True
+        await abort()
 
     async def after_tool_call(self, ctx: AgentCallbackContext) -> None:
+        if not self._user_text:
+            self._user_text = _user_text_from_ctx(ctx)
         inputs = ctx.inputs
         name = str(getattr(inputs, "tool_name", "") or "")
         if not name:
@@ -82,6 +134,7 @@ class CodeEditNudgeRail(DeepAgentRail):
             return
         if name in _EXPLORE_TOOLS:
             self._explore_count += 1
+            await self._maybe_abort_explore_only(ctx)
             return
         # Read-only bash (git archaeology, go test/build, grep/cat) burns the
         # explore budget too — common failure mode on pruned eval checkouts.
@@ -89,6 +142,7 @@ class CodeEditNudgeRail(DeepAgentRail):
             cmd = extract_bash_command(getattr(inputs, "tool_args", None))
             if looks_like_explore_bash(cmd):
                 self._explore_count += 1
+                await self._maybe_abort_explore_only(ctx)
 
     async def before_model_call(self, ctx: AgentCallbackContext) -> None:
         builder = self.system_prompt_builder

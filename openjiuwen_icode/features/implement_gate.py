@@ -774,6 +774,11 @@ def go_command_matches_task_scope(user_text: str, command: str) -> bool:
     if match:
         expr = match.group(2)
         return any(_keyword_in_command(kw, expr) for kw in keywords)
+    if "./..." not in lower and re.search(
+        r"\./[\w./-]+(?:\s|$)", lower
+    ):
+        # Targeted package paths (not repo-wide ./...) count as scoped.
+        return True
     return any(_keyword_in_command(kw, lower) for kw in keywords)
 
 

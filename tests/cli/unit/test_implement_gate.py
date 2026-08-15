@@ -378,6 +378,10 @@ def test_go_command_matches_task_scope() -> None:
     assert go_command_matches_task_scope(
         task, "go test -run DefaultArgument -count=1 ./..."
     )
+    assert go_command_matches_task_scope(
+        task, "go test ./parser ./vm -count=1"
+    )
+    assert not go_command_matches_task_scope(task, "go test -count=1")
 
 
 def test_go_verify_requires_task_scoped_go_test() -> None:

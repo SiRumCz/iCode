@@ -184,6 +184,26 @@ def load_config(
                 return val
         return None
 
+    def _stream_iteration_cap() -> int:
+        """Upper bound on inner ReAct loops per SessionHost continuation."""
+        raw = _env("ICODE_STREAM_ITERATION_CAP", "OPENJIUWEN_STREAM_ITERATION_CAP")
+        try:
+            return max(1, int(raw or 50))
+        except ValueError:
+            return 50
+
+    requested_iterations = int(
+        _env("ICODE_MAX_ITERATIONS", "OPENJIUWEN_MAX_ITERATIONS")
+        or settings.get("maxIterations")
+        or 30
+    )
+    stream_cap = _stream_iteration_cap()
+    effective_iterations = (
+        min(requested_iterations, stream_cap)
+        if requested_iterations > stream_cap
+        else requested_iterations
+    )
+
     cfg = CLIConfig(
         provider=(
             provider
@@ -209,11 +229,7 @@ def load_config(
             or settings.get("apiBase")
             or "https://api.openai.com/v1"
         ),
-        max_iterations=int(
-            _env("ICODE_MAX_ITERATIONS", "OPENJIUWEN_MAX_ITERATIONS")
-            or settings.get("maxIterations")
-            or 30
-        ),
+        max_iterations=effective_iterations,
         max_tokens=int(
             _env("ICODE_MAX_TOKENS", "OPENJIUWEN_MAX_TOKENS")
             or settings.get("maxTokens")

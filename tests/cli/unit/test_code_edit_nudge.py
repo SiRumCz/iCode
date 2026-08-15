@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -100,3 +100,26 @@ async def test_nudge_cleared_after_mutation() -> None:
     )
     await rail.before_model_call(MagicMock())
     assert "code_edit_nudge" not in builder.sections
+
+
+@pytest.mark.asyncio
+async def test_abort_after_explore_cap_on_implement_task() -> None:
+    rail = CodeEditNudgeRail(explore_budget=2, explore_abort_cap=4)
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    ctx = SimpleNamespace(
+        inputs=SimpleNamespace(
+            tool_name="grep",
+            tool_args={},
+            messages=[
+                SimpleNamespace(
+                    role="user",
+                    content="Implement typed variable bindings in parser/vm",
+                )
+            ],
+        )
+    )
+    for _ in range(4):
+        await rail.after_tool_call(ctx)
+    agent.abort.assert_called_once()
