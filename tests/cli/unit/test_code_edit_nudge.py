@@ -158,6 +158,21 @@ async def test_failed_edit_still_counts_as_explore() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reset_stream_state_fresh_abort_budget() -> None:
+    rail = CodeEditNudgeRail(explore_budget=2, explore_abort_cap=3)
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail._model_rounds = 18
+    rail._explore_count = 10
+    rail._aborted_for_explore = True
+    rail.reset_stream_state()
+    assert rail._model_rounds == 0
+    assert rail._explore_count == 0
+    assert rail._aborted_for_explore is False
+
+
+@pytest.mark.asyncio
 async def test_all_bash_counts_as_explore_before_mutation() -> None:
     rail = CodeEditNudgeRail(explore_budget=2)
     builder = _FakeBuilder()

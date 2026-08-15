@@ -24,6 +24,7 @@ from openjiuwen_icode.features.implement_gate import (
     mutation_args_touch_native,
     mutation_args_touch_python,
     mutation_text_from_args,
+    primary_user_task_text,
     tool_is_edit_existing,
     verify_command_qualifies_for_completion,
 )
@@ -38,29 +39,8 @@ _PRIORITY = 97
 
 
 def _user_text_from_ctx(ctx: Any) -> str:
-    """Best-effort extract of the latest user task text from callback ctx."""
-    messages = getattr(getattr(ctx, "inputs", None), "messages", None) or []
-    for msg in reversed(list(messages)):
-        role = getattr(msg, "role", None)
-        if role is None and isinstance(msg, dict):
-            role = msg.get("role")
-        if role != "user":
-            continue
-        content = getattr(msg, "content", None)
-        if content is None and isinstance(msg, dict):
-            content = msg.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
-        if isinstance(content, list):
-            texts = [
-                p.get("text", "")
-                for p in content
-                if isinstance(p, dict) and p.get("type") == "text"
-            ]
-            joined = " ".join(t for t in texts if t).strip()
-            if joined:
-                return joined
-    return ""
+    """Best-effort extract of the original user task from callback ctx."""
+    return primary_user_task_text(ctx)
 
 _SHALLOW_EN = (
     "## Incomplete edit reminder\n"

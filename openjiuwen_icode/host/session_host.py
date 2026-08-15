@@ -310,6 +310,7 @@ class SessionHost:
                 next_implement_continuation,
                 tool_is_edit_existing,
                 verify_command_qualifies_for_completion,
+                wrap_implement_continuation_query,
             )
             from openjiuwen_icode.features.mutations import MUTATING_TOOLS
             from openjiuwen_icode.features.stream_stall import (
@@ -472,7 +473,9 @@ class SessionHost:
                         nudge = _continuation_nudge()
                         if nudge is not None:
                             continuation_attempts += 1
-                            query = nudge
+                            query = wrap_implement_continuation_query(
+                                event.text, nudge
+                            )
                             continue
                     raise
 
@@ -495,7 +498,9 @@ class SessionHost:
                 nudge = _continuation_nudge()
                 if nudge is not None and continuation_attempts < max_continuations:
                     continuation_attempts += 1
-                    query = nudge
+                    query = wrap_implement_continuation_query(
+                        event.text, nudge
+                    )
                     continue
 
                 # Fail closed: do not report success with an empty patch /

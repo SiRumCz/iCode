@@ -666,6 +666,7 @@ class LocalBackend:
         from openjiuwen_icode.host.workdirs import (
             apply_pending_workdir_cwd,
         )
+        from openjiuwen_icode.rails.code_edit_nudge import reset_stream_rails
 
         apply_pending_workdir_cwd(self)
         await self._load_runtime_extensions()
@@ -681,6 +682,7 @@ class LocalBackend:
 
         def _open() -> AsyncIterator[Any]:
             attempt["n"] += 1
+            reset_stream_rails(self.agent)
             payload_query: Any = query
             if attempt["n"] > 1 and isinstance(query, str):
                 payload_query = stall_nudge

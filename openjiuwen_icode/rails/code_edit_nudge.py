@@ -14,6 +14,7 @@ from openjiuwen_icode.features.implement_gate import (
     extract_bash_command,
     looks_like_explore_bash,
     looks_like_implement_task,
+    primary_user_task_text,
 )
 from openjiuwen_icode.features.mutations import (
     MUTATING_TOOLS,
@@ -55,21 +56,20 @@ _NUDGE_CN = (
 )
 
 
-def _user_text_from_ctx(ctx: Any) -> str:
-    """Best-effort extract of the latest user task text from callback ctx."""
-    messages = getattr(getattr(ctx, "inputs", None), "messages", None) or []
-    for msg in reversed(list(messages)):
-        role = getattr(msg, "role", None)
-        if role is None and isinstance(msg, dict):
-            role = msg.get("role")
-        if role != "user":
-            continue
-        content = getattr(msg, "content", None)
-        if content is None and isinstance(msg, dict):
-            content = msg.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
-    return ""
+def reset_stream_rails(agent: Any) -> None:
+    """Reset per-stream explore counters on coding rails."""
+    if agent is None:
+        return
+    rails = getattr(agent, "rails", None)
+    if rails is None:
+        deep = getattr(agent, "deep_config", None)
+        rails = getattr(deep, "rails", None) if deep else None
+    if not rails:
+        return
+    for rail in rails:
+        reset = getattr(rail, "reset_stream_state", None)
+        if callable(reset):
+            reset()
 
 
 class CodeEditNudgeRail(DeepAgentRail):
@@ -115,6 +115,19 @@ class CodeEditNudgeRail(DeepAgentRail):
         self._aborted_for_explore = False
         self._user_text = ""
 
+    def reset_stream_state(self) -> None:
+        """Fresh explore/abort budget for each inner ReAct stream."""
+        self._explore_count = 0
+        self._model_rounds = 0
+        self._aborted_for_explore = False
+
+    def _ensure_user_text(self, ctx: AgentCallbackContext) -> None:
+        if self._user_text:
+            return
+        text = primary_user_task_text(ctx)
+        if text:
+            self._user_text = text
+
     async def _maybe_abort_explore_only(self, ctx: AgentCallbackContext) -> None:
         if (
             self._workspace_mutated
@@ -125,8 +138,7 @@ class CodeEditNudgeRail(DeepAgentRail):
             )
         ):
             return
-        if not self._user_text:
-            self._user_text = _user_text_from_ctx(ctx)
+        self._ensure_user_text(ctx)
         if not looks_like_implement_task(self._user_text):
             return
         agent = self._agent
@@ -141,8 +153,7 @@ class CodeEditNudgeRail(DeepAgentRail):
         await self._maybe_abort_explore_only(ctx)
 
     async def after_tool_call(self, ctx: AgentCallbackContext) -> None:
-        if not self._user_text:
-            self._user_text = _user_text_from_ctx(ctx)
+        self._ensure_user_text(ctx)
         inputs = ctx.inputs
         name = str(getattr(inputs, "tool_name", "") or "")
         if not name:
@@ -168,8 +179,7 @@ class CodeEditNudgeRail(DeepAgentRail):
 
     async def before_model_call(self, ctx: AgentCallbackContext) -> None:
         self._model_rounds += 1
-        if not self._user_text:
-            self._user_text = _user_text_from_ctx(ctx)
+        self._ensure_user_text(ctx)
         if (
             not self._workspace_mutated
             and looks_like_implement_task(self._user_text)
@@ -198,4 +208,4 @@ class CodeEditNudgeRail(DeepAgentRail):
         )
 
 
-__all__ = ["CodeEditNudgeRail"]
+__all__ = ["CodeEditNudgeRail", "reset_stream_rails"]

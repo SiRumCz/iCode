@@ -16,6 +16,7 @@ from openjiuwen_icode.features.implement_gate import (
     extract_bash_command,
     extract_bash_command_from_result,
     extract_required_prompt_symbols,
+    is_headless_continuation_nudge,
     is_native_source_path,
     is_shallow_signature_edit,
     looks_like_implement_task,
@@ -24,9 +25,11 @@ from openjiuwen_icode.features.implement_gate import (
     looks_like_verify_command,
     mutation_args_touch_native,
     next_implement_continuation,
+    primary_user_task_text,
     pytest_command_matches_task_scope,
     task_requires_submit,
     verify_command_qualifies_for_completion,
+    wrap_implement_continuation_query,
 )
 
 
@@ -36,12 +39,37 @@ def test_looks_like_implement_task_positive() -> None:
     )
     assert looks_like_implement_task("Please fix the bug in args.rs")
     assert looks_like_implement_task("Add support for inline TOML")
+    assert looks_like_implement_task(
+        "Add `var x: type = value` syntax to Anko for typed variable declarations."
+    )
 
 
 def test_looks_like_implement_task_negative() -> None:
     assert not looks_like_implement_task("What is Ruff?")
     assert not looks_like_implement_task("")
     assert not looks_like_implement_task("Explain how --config works")
+
+
+def test_primary_user_task_text_skips_continuation_nudges() -> None:
+    original = (
+        "Add typed variable bindings to Anko parser and vm with type error messages."
+    )
+    messages = [
+        {"role": "user", "content": original},
+        {"role": "assistant", "content": "I'll inspect the repo."},
+        {"role": "user", "content": ZERO_MUTATION_NUDGE},
+    ]
+    assert primary_user_task_text(messages) == original
+    assert is_headless_continuation_nudge(ZERO_MUTATION_NUDGE)
+    assert not is_headless_continuation_nudge(original)
+
+
+def test_wrap_implement_continuation_query_includes_original_task() -> None:
+    original = "Add typed bindings to Anko."
+    wrapped = wrap_implement_continuation_query(original, ZERO_MUTATION_NUDGE)
+    assert ZERO_MUTATION_NUDGE in wrapped
+    assert original in wrapped
+    assert wrap_implement_continuation_query(original, original) == original
 
 
 def test_verify_and_submit_command_detection() -> None:

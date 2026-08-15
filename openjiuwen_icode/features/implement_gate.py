@@ -13,6 +13,7 @@ _IMPLEMENT_HINTS = (
     "implement",
     "fix ",
     "fix the",
+    "add ",
     "add support",
     "add a",
     "edit ",
@@ -342,6 +343,90 @@ GO_SUITE_NUDGE = (
     "until tests pass. Do not leave build output binaries (e.g. `./main`, "
     "`./abs`) in the repo — use `/tmp` or remove them before finishing."
 )
+
+
+def _message_text(msg: Any) -> str:
+    """Extract plain text from a chat message object or dict."""
+    content = getattr(msg, "content", None)
+    if content is None and isinstance(msg, dict):
+        content = msg.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            p.get("text", "")
+            for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        ]
+        return " ".join(t for t in parts if t).strip()
+    return ""
+
+
+def is_headless_continuation_nudge(text: str) -> bool:
+    """Return True when *text* is a SessionHost / stall continuation nudge."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    for marker in (
+        ZERO_MUTATION_NUDGE,
+        WORKTREE_NUDGE,
+        STALL_CONTINUATION_NUDGE,
+        SHALLOW_EDIT_NUDGE,
+        INTEGRATION_NUDGE,
+        VERIFY_NUDGE,
+        VERIFY_FAILED_NUDGE,
+        SUBMIT_NUDGE,
+        NATIVE_BUILD_NUDGE,
+        PYTHON_SUITE_NUDGE,
+        GO_SUITE_NUDGE,
+    ):
+        if stripped == marker or stripped.startswith(marker[:48]):
+            return True
+    if stripped.startswith("Your patch is missing symbols/APIs the user named:"):
+        return True
+    return False
+
+
+def primary_user_task_text(messages_or_ctx: Any) -> str:
+    """Return the original user task, not a headless continuation nudge."""
+    messages = messages_or_ctx
+    if not isinstance(messages, list):
+        messages = (
+            getattr(getattr(messages_or_ctx, "inputs", None), "messages", None)
+            or []
+        )
+    fallback = ""
+    for msg in messages:
+        role = getattr(msg, "role", None)
+        if role is None and isinstance(msg, dict):
+            role = msg.get("role")
+        if role != "user":
+            continue
+        text = _message_text(msg)
+        if not text or is_headless_continuation_nudge(text):
+            continue
+        if looks_like_implement_task(text):
+            return text
+        if not fallback:
+            fallback = text
+    return fallback
+
+
+def wrap_implement_continuation_query(original: str, nudge: str) -> str:
+    """Attach the original task to a headless continuation nudge."""
+    orig = (original or "").strip()
+    ndg = (nudge or "").strip()
+    if not ndg:
+        return orig
+    if not orig or ndg == orig or orig in ndg:
+        return ndg
+    body = orig if len(orig) <= 6000 else orig[:6000] + "\n...(truncated)"
+    return (
+        f"{ndg}\n\n"
+        "---\n"
+        "Original task (still applies — implement this in the repo):\n"
+        f"{body}"
+    )
 
 
 def looks_like_implement_task(text: str) -> bool:
@@ -1047,6 +1132,7 @@ __all__ = [
     "VERIFY_FAILED_NUDGE",
     "VERIFY_NUDGE",
     "WORKTREE_NUDGE",
+    "wrap_implement_continuation_query",
     "ZERO_MUTATION_NUDGE",
     "bash_result_succeeded",
     "edit_args_look_shallow",
@@ -1054,6 +1140,7 @@ __all__ = [
     "extract_bash_command_from_result",
     "extract_required_prompt_symbols",
     "is_go_source_path",
+    "is_headless_continuation_nudge",
     "is_native_source_path",
     "is_python_source_path",
     "is_shallow_signature_edit",
@@ -1072,6 +1159,7 @@ __all__ = [
     "mutation_args_touch_python",
     "mutation_text_from_args",
     "next_implement_continuation",
+    "primary_user_task_text",
     "prompt_symbol_nudge",
     "pytest_command_matches_task_scope",
     "task_requires_submit",
