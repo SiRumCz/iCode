@@ -333,16 +333,19 @@ class SessionHost:
             def _task_text() -> str:
                 return (self._last_user_text or event.text or "").strip()
 
+            def _workspace_deliverable() -> bool:
+                return (
+                    self._mutations is not None
+                    and self._mutations.has_deliverable_workspace_changes()
+                )
+
             def _continuation_nudge() -> str | None:
                 user_text = _task_text()
                 missing = missing_prompt_symbols(
                     user_text=user_text,
                     mutation_blob="\n".join(mutation_blob_parts),
                 )
-                workspace_mutated = (
-                    self._mutations is not None
-                    and self._mutations.has_workspace_changes()
-                )
+                workspace_mutated = _workspace_deliverable()
                 return next_implement_continuation(
                     user_text=user_text,
                     mutate_attempted=mutate_attempted,
@@ -472,10 +475,7 @@ class SessionHost:
                                                 cmd
                                             ):
                                                 typescript_suite_verified = True
-                                            workspace_ok = (
-                                                self._mutations is not None
-                                                and self._mutations.has_workspace_changes()
-                                            )
+                                            workspace_ok = _workspace_deliverable()
                                             if (
                                                 workspace_ok
                                                 and verify_command_qualifies_for_completion(
@@ -486,6 +486,7 @@ class SessionHost:
                                                     typescript_mutated=typescript_mutated,
                                                     success=True,
                                                     user_text=_task_text(),
+                                                    workspace_mutated=workspace_ok,
                                                 )
                                             ):
                                                 verify_succeeded = True
@@ -555,10 +556,7 @@ class SessionHost:
                 if (
                     self._auto_approve
                     and looks_like_implement_task(task_text)
-                    and (
-                        self._mutations is None
-                        or not self._mutations.has_workspace_changes()
-                    )
+                    and not _workspace_deliverable()
                 ):
                     forced = (
                         WORKTREE_NUDGE if mutate_attempted else ZERO_MUTATION_NUDGE

@@ -82,9 +82,10 @@ def tighten_edit_rails_for_continuation(agent: Any) -> None:
     not burn another full explore window on grep/go test loops.
     """
     for rail in _iter_code_edit_rails(agent):
-        rail.explore_budget = 1
-        rail.explore_abort_cap = max(3, rail.explore_budget + 2)
-        rail.model_abort_cap = max(6, rail.explore_budget + 4)
+        # Continuation streams must edit immediately — no extra grep/npm loops.
+        rail.explore_budget = 0
+        rail.explore_abort_cap = 1
+        rail.model_abort_cap = 2
         rail.reset_stream_state()
 
 

@@ -547,6 +547,10 @@ def test_go_verify_requires_task_scoped_go_test() -> None:
 
 
 def test_next_implement_continuation_chain() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        zero_mutation_continuation_nudge,
+    )
+
     text = "Implement --config overrides then run lolbench-submit"
     assert (
         next_implement_continuation(
@@ -557,7 +561,7 @@ def test_next_implement_continuation_chain() -> None:
             submit_attempted=False,
             shallow_only=True,
         )
-        == ZERO_MUTATION_NUDGE
+        == zero_mutation_continuation_nudge(text)
     )
     assert (
         next_implement_continuation(
@@ -832,4 +836,33 @@ def test_worktree_nudge_when_edits_do_not_change_files() -> None:
             workspace_mutated=False,
         )
         == WORKTREE_NUDGE
+    )
+
+
+def test_zero_mutation_nudge_lists_task_apis() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        zero_mutation_continuation_nudge,
+    )
+
+    task = (
+        "Add support for async init. "
+        "Use container.initialize() and .initializer() on registrations. "
+        "Throw AwilixNotInitializedError when unresolved."
+    )
+    nudge = zero_mutation_continuation_nudge(task)
+    assert "edit_file" in nudge
+    assert "initialize" in nudge
+    assert "initializer" in nudge
+
+
+def test_verify_rejected_without_workspace_changes() -> None:
+    assert (
+        verify_command_qualifies_for_completion(
+            "npm test -- async-initialization",
+            native_mutated=False,
+            typescript_mutated=True,
+            success=True,
+            workspace_mutated=False,
+        )
+        is False
     )

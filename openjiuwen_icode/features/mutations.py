@@ -236,16 +236,70 @@ class MutationTracker:
                 if not mut.snapshot_after:
                     mut.snapshot_after = self._snapshot_file(path, "after")
 
+    def _path_under_workspace(self, path: str) -> bool:
+        """Return True when *path* resolves inside this tracker's workspace."""
+        if not path or not str(path).strip():
+            return False
+        try:
+            resolved = Path(path).expanduser().resolve()
+            ws = self.workspace.expanduser().resolve()
+        except OSError:
+            return False
+        return resolved == ws or ws in resolved.parents
+
     def has_workspace_changes(self) -> bool:
         """Return True when the open turn changed at least one file on disk."""
         if self._current is None:
             return False
         for mut in self._current.files:
+            if not self._path_under_workspace(mut.path):
+                continue
             if mut.kind == "create" and mut.after_hash:
                 return True
             if mut.after_hash and mut.after_hash != mut.before_hash:
                 return True
         return False
+
+    def git_worktree_dirty(self) -> bool | None:
+        """Return True/False when ``git status --porcelain`` has output, else None."""
+        if not (self.workspace / ".git").exists():
+            # Nested checkout: still ask git from workspace root.
+            try:
+                proc = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    cwd=str(self.workspace),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            if proc.returncode != 0:
+                return None
+        try:
+            proc = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(self.workspace),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode != 0:
+            return None
+        return bool((proc.stdout or "").strip())
+
+    def has_deliverable_workspace_changes(self) -> bool:
+        """Return True when in-workspace edits would show up in ``git status``."""
+        if not self.has_workspace_changes():
+            return False
+        dirty = self.git_worktree_dirty()
+        if dirty is None:
+            return True
+        return dirty
 
     def list_turns(self) -> list[TurnMutations]:
         return list(self._turns)

@@ -714,8 +714,11 @@ def verify_command_qualifies_for_completion(
     go_mutated: bool = False,
     typescript_mutated: bool = False,
     user_text: str = "",
+    workspace_mutated: bool = True,
 ) -> bool:
     """Return True when a successful verify command completes the verify gate."""
+    if not workspace_mutated:
+        return False
     if not success or not looks_like_verify_command(command):
         return False
     if native_mutated and not looks_like_native_build_command(command):
@@ -1054,6 +1057,8 @@ def extract_required_prompt_symbols(text: str) -> tuple[str, ...]:
         _add(m.group(1))
     for m in re.finditer(r"\b([A-Za-z_][\w]{3,})\(\)", text):
         _add(m.group(1))
+    for m in re.finditer(r"\.([a-zA-Z_][\w]{2,})\(", text):
+        _add(m.group(1), allow_short=True)
     for m in re.finditer(r"(--[a-zA-Z][\w-]{2,})", text):
         _add(m.group(1))
     # CamelCase entrypoints (BeginRepl) not already captured.
@@ -1154,6 +1159,19 @@ def prompt_symbol_nudge(missing: tuple[str, ...] | list[str]) -> str:
     return PROMPT_SYMBOL_NUDGE_TEMPLATE.format(symbols=symbols or "(none)")
 
 
+def zero_mutation_continuation_nudge(user_text: str) -> str:
+    """Build a zero-mutation nudge, optionally listing APIs named in the task."""
+    symbols = extract_required_prompt_symbols(user_text)[:6]
+    if not symbols:
+        return ZERO_MUTATION_NUDGE
+    listed = ", ".join(f"`{sym}`" for sym in symbols)
+    return (
+        f"{ZERO_MUTATION_NUDGE}\n\n"
+        f"The task names these APIs — wire them under the repo cwd with "
+        f"`edit_file` / `write_file` (for example {listed})."
+    )
+
+
 def next_implement_continuation(
     *,
     user_text: str,
@@ -1178,7 +1196,7 @@ def next_implement_continuation(
     if not looks_like_implement_task(user_text):
         return None
     if not mutate_attempted:
-        return ZERO_MUTATION_NUDGE
+        return zero_mutation_continuation_nudge(user_text)
     if not workspace_mutated:
         return WORKTREE_NUDGE
     if shallow_only:
@@ -1297,6 +1315,7 @@ __all__ = [
     "VERIFY_NUDGE",
     "WORKTREE_NUDGE",
     "wrap_implement_continuation_query",
+    "zero_mutation_continuation_nudge",
     "ZERO_MUTATION_NUDGE",
     "bash_result_succeeded",
     "edit_args_look_shallow",

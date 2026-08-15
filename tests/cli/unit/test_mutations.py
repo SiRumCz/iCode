@@ -57,6 +57,44 @@ def test_has_workspace_changes(tmp_path: Path) -> None:
     assert tracker.has_workspace_changes() is True
 
 
+def test_has_workspace_changes_ignores_outside_workspace(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("v1\n", encoding="utf-8")
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("sess-1")
+    tracker.record_tool_mutation("edit_file", {"path": str(outside)})
+    outside.write_text("v2\n", encoding="utf-8")
+    tracker.refresh_after_hashes()
+    assert tracker.has_workspace_changes() is False
+
+
+def test_has_deliverable_workspace_changes_requires_git_dirty(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    subprocess.run(["git", "init"], cwd=ws, check=True, capture_output=True)
+    target = ws / "a.txt"
+    target.write_text("v1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "a.txt"], cwd=ws, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=icode@local", "-c", "user.name=icode", "commit", "-m", "base"],
+        cwd=ws,
+        check=True,
+        capture_output=True,
+    )
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("sess-1")
+    tracker.record_tool_mutation("edit_file", {"path": str(target)})
+    target.write_text("v2\n", encoding="utf-8")
+    tracker.refresh_after_hashes()
+    assert tracker.has_workspace_changes() is True
+    assert tracker.git_worktree_dirty() is True
+    assert tracker.has_deliverable_workspace_changes() is True
+
+
 def test_mutating_tool_applied() -> None:
     assert mutating_tool_applied(
         "edit_file",

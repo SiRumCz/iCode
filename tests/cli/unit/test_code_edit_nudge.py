@@ -219,6 +219,7 @@ def test_tighten_edit_rails_for_continuation() -> None:
     agent.rails = [rail]
     rail._explore_count = 9
     tighten_edit_rails_for_continuation(agent)
-    assert rail.explore_budget == 1
-    assert rail.explore_abort_cap <= 5
+    assert rail.explore_budget == 0
+    assert rail.explore_abort_cap == 1
+    assert rail.model_abort_cap == 2
     assert rail._explore_count == 0
