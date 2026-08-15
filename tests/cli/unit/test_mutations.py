@@ -15,6 +15,7 @@ from openjiuwen_icode.features.mutations import (
     _git_checkout_file,
     _git_diff_file,
     mutating_tool_applied,
+    path_under_workspace,
 )
 
 
@@ -93,6 +94,19 @@ def test_has_deliverable_workspace_changes_requires_git_dirty(tmp_path: Path) ->
     assert tracker.has_workspace_changes() is True
     assert tracker.git_worktree_dirty() is True
     assert tracker.has_deliverable_workspace_changes() is True
+
+
+def test_path_under_workspace(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    inside = ws / "src" / "container.ts"
+    inside.parent.mkdir(parents=True)
+    outside = tmp_path / "other.ts"
+
+    assert path_under_workspace(str(inside), ws)
+    assert path_under_workspace("src/container.ts", ws)
+    assert not path_under_workspace(str(outside), ws)
+    assert not path_under_workspace("/tmp/nope.ts", ws)
 
 
 def test_mutating_tool_applied() -> None:

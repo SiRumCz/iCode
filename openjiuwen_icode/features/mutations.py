@@ -238,14 +238,7 @@ class MutationTracker:
 
     def _path_under_workspace(self, path: str) -> bool:
         """Return True when *path* resolves inside this tracker's workspace."""
-        if not path or not str(path).strip():
-            return False
-        try:
-            resolved = Path(path).expanduser().resolve()
-            ws = self.workspace.expanduser().resolve()
-        except OSError:
-            return False
-        return resolved == ws or ws in resolved.parents
+        return path_under_workspace(path, self.workspace)
 
     def has_workspace_changes(self) -> bool:
         """Return True when the open turn changed at least one file on disk."""
@@ -381,6 +374,27 @@ class MutationTracker:
         return rel
 
 
+def mutation_path_from_args(tool_args: Any) -> str:
+    """Extract a filesystem path from edit/write tool args."""
+    return _extract_path(tool_args)
+
+
+def path_under_workspace(path: str, workspace: Path | None) -> bool:
+    """Return True when *path* resolves inside *workspace*."""
+    if not path or not str(path).strip() or workspace is None:
+        return False
+    try:
+        resolved = Path(path).expanduser()
+        ws = workspace.expanduser().resolve()
+        if not resolved.is_absolute():
+            resolved = (ws / resolved).resolve()
+        else:
+            resolved = resolved.resolve()
+    except OSError:
+        return False
+    return resolved == ws or ws in resolved.parents
+
+
 def _extract_path(tool_args: Any) -> str:
     if isinstance(tool_args, str):
         try:
@@ -442,6 +456,8 @@ __all__ = [
     "MUTATING_TOOLS",
     "MutationTracker",
     "TurnMutations",
+    "mutation_path_from_args",
     "mutating_tool_applied",
+    "path_under_workspace",
     "tool_result_payload",
 ]

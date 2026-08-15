@@ -223,3 +223,58 @@ def test_tighten_edit_rails_for_continuation() -> None:
     assert rail.explore_abort_cap == 1
     assert rail.model_abort_cap == 2
     assert rail._explore_count == 0
+
+
+def test_default_explore_abort_cap_is_tight() -> None:
+    rail = CodeEditNudgeRail(explore_budget=3)
+    assert rail.explore_abort_cap == 5
+
+
+@pytest.mark.asyncio
+async def test_out_of_workspace_edit_does_not_disable_explore_abort() -> None:
+    rail = CodeEditNudgeRail(
+        explore_budget=2,
+        explore_abort_cap=3,
+        model_abort_cap=2,
+    )
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    agent.cfg = SimpleNamespace(cwd="/app")
+    rail.init(agent)
+    messages = [
+        SimpleNamespace(
+            role="user",
+            content="Implement async container initialization",
+        )
+    ]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "openjiuwen_icode.rails.code_edit_nudge._agent_workspace",
+            lambda _agent: __import__("pathlib").Path("/app"),
+        )
+        await rail.after_tool_call(
+            SimpleNamespace(
+                inputs=SimpleNamespace(
+                    tool_name="edit_file",
+                    tool_args={"path": "/tmp/outside.ts"},
+                    tool_result=SimpleNamespace(
+                        success=True,
+                        content="Applied patch",
+                    ),
+                    messages=messages,
+                )
+            )
+        )
+        ctx = SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="grep",
+                tool_args={},
+                messages=messages,
+            )
+        )
+        for _ in range(3):
+            await rail.after_tool_call(ctx)
+        await rail.before_model_call(ctx)
+        await rail.before_model_call(ctx)
+    assert rail._workspace_mutated is False
+    agent.abort.assert_called_once()

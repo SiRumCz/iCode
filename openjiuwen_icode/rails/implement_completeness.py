@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from openjiuwen.core.single_agent.prompts.builder import PromptSection
@@ -25,6 +26,7 @@ from openjiuwen_icode.features.implement_gate import (
     mutation_args_touch_native,
     mutation_args_touch_python,
     mutation_args_touch_typescript,
+    mutation_args_under_workspace,
     mutation_text_from_args,
     primary_user_task_text,
     tool_is_edit_existing,
@@ -160,6 +162,19 @@ _VERIFY_FAILED_CN = (
 )
 
 
+def _agent_workspace(agent: Any) -> Path | None:
+    if agent is None:
+        return None
+    cfg = getattr(agent, "cfg", None)
+    cwd = getattr(cfg, "cwd", None) if cfg else None
+    if not cwd:
+        return None
+    try:
+        return Path(str(cwd)).expanduser().resolve()
+    except OSError:
+        return None
+
+
 class ImplementCompletenessRail(DeepAgentRail):
     """Inject shallow-edit / verify reminders mid-turn after mutations."""
 
@@ -224,6 +239,8 @@ class ImplementCompletenessRail(DeepAgentRail):
                     name, result_payload, tool_success=tool_success
                 )
             if not applied:
+                return
+            if not mutation_args_under_workspace(args, _agent_workspace(self._agent)):
                 return
             self._mutated = True
             self._verify_succeeded = False

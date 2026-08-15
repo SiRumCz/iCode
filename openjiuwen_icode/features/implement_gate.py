@@ -9,6 +9,13 @@ import re
 from collections import Counter
 from typing import Any
 
+from pathlib import Path
+
+from openjiuwen_icode.features.mutations import (
+    mutation_path_from_args,
+    path_under_workspace,
+)
+
 _IMPLEMENT_HINTS = (
     "implement",
     "fix ",
@@ -565,6 +572,14 @@ def is_typescript_source_path(path: str) -> bool:
         return False
     lower = str(path).lower().split("?", 1)[0]
     return lower.endswith(_TYPESCRIPT_SOURCE_SUFFIXES)
+
+
+def mutation_args_under_workspace(tool_args: Any, workspace: Path | None) -> bool:
+    """Return True when edit/write args target a path inside *workspace*."""
+    path = mutation_path_from_args(tool_args)
+    if not path or workspace is None:
+        return True
+    return path_under_workspace(path, workspace)
 
 
 def _mutation_args_touch_suffixes(
@@ -1271,6 +1286,15 @@ def looks_like_explore_bash(command: str) -> bool:
         "npx jest",
         "npx mocha",
         "npx vitest",
+        "npx tsc",
+        "tsc ",
+        "tsc\t",
+        "npm run build",
+        "npm run lint",
+        "pnpm run build",
+        "pnpm run lint",
+        "yarn build",
+        "yarn run build",
         "jest ",
         "jest\t",
         "mocha ",
@@ -1344,6 +1368,7 @@ __all__ = [
     "mutation_args_touch_native",
     "mutation_args_touch_python",
     "mutation_args_touch_typescript",
+    "mutation_args_under_workspace",
     "mutation_text_from_args",
     "next_implement_continuation",
     "original_task_from_query",

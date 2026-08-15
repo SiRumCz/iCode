@@ -487,8 +487,26 @@ def test_looks_like_explore_bash() -> None:
     assert looks_like_explore_bash("npx jest --runInBand")
     assert looks_like_explore_bash("grep -R 'default' parser/")
     assert looks_like_explore_bash("cat vm/vm.go | head")
+    assert looks_like_explore_bash("npx tsc --noEmit")
+    assert looks_like_explore_bash("npm run build")
     assert not looks_like_explore_bash("cargo check -p ruff")
     assert not looks_like_explore_bash("git status")
+
+
+def test_mutation_args_under_workspace(tmp_path: Path) -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        mutation_args_under_workspace,
+    )
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    inside = ws / "src" / "errors.ts"
+    inside.parent.mkdir(parents=True)
+    outside = tmp_path / "errors.ts"
+
+    assert mutation_args_under_workspace({"path": str(inside)}, ws)
+    assert mutation_args_under_workspace({"path": "src/errors.ts"}, ws)
+    assert not mutation_args_under_workspace({"path": str(outside)}, ws)
 
 
 def test_go_command_matches_task_scope() -> None:

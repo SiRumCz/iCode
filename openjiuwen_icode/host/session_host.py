@@ -315,6 +315,7 @@ class SessionHost:
                 mutation_args_touch_native,
                 mutation_args_touch_python,
                 mutation_args_touch_typescript,
+                mutation_args_under_workspace,
                 mutation_text_from_args,
                 next_implement_continuation,
                 tool_is_edit_existing,
@@ -332,6 +333,11 @@ class SessionHost:
 
             def _task_text() -> str:
                 return (self._last_user_text or event.text or "").strip()
+
+            def _workspace_root() -> Path | None:
+                if self._mutations is None:
+                    return None
+                return self._mutations.workspace
 
             def _workspace_deliverable() -> bool:
                 return (
@@ -424,6 +430,10 @@ class SessionHost:
                                         result_payload,
                                         tool_success=tool_success,
                                     ):
+                                        if args is not None and not mutation_args_under_workspace(
+                                            args, _workspace_root()
+                                        ):
+                                            continue
                                         mutate_attempted = True
                                         verify_succeeded = False
                                         if args is not None:

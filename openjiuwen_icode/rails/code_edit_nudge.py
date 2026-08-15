@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from openjiuwen.core.single_agent.prompts.builder import PromptSection
@@ -18,7 +19,9 @@ from openjiuwen_icode.features.implement_gate import (
 )
 from openjiuwen_icode.features.mutations import (
     MUTATING_TOOLS,
+    mutation_path_from_args,
     mutating_tool_applied,
+    path_under_workspace,
     tool_result_payload,
 )
 
@@ -54,6 +57,20 @@ _NUDGE_CN = (
     "用户要求修改代码。本轮请停止继续搜索，立刻用 `edit_file` 或 "
     "`write_file` 落一个小而可运行的补丁，而不是继续分析。"
 )
+
+
+def _agent_workspace(agent: Any) -> Path | None:
+    """Best-effort session workspace root from the mounted agent."""
+    if agent is None:
+        return None
+    cfg = getattr(agent, "cfg", None)
+    cwd = getattr(cfg, "cwd", None) if cfg else None
+    if not cwd:
+        return None
+    try:
+        return Path(str(cwd)).expanduser().resolve()
+    except OSError:
+        return None
 
 
 def _iter_code_edit_rails(agent: Any) -> list["CodeEditNudgeRail"]:
@@ -106,7 +123,7 @@ class CodeEditNudgeRail(DeepAgentRail):
         cap = explore_abort_cap
         self.explore_abort_cap = max(
             self.explore_budget + 1,
-            int(cap if cap is not None else self.explore_budget * 4),
+            int(cap if cap is not None else self.explore_budget + 2),
         )
         self.model_abort_cap = max(
             self.explore_budget + 1,
@@ -182,6 +199,11 @@ class CodeEditNudgeRail(DeepAgentRail):
                 if mutating_tool_applied(
                     name, result_payload, tool_success=tool_success
                 ):
+                    ws = _agent_workspace(self._agent)
+                    path = mutation_path_from_args(getattr(inputs, "tool_args", None))
+                    if ws is not None and path and not path_under_workspace(path, ws):
+                        await self._count_explore(ctx)
+                        return
                     self._workspace_mutated = True
                     return
                 await self._count_explore(ctx)
