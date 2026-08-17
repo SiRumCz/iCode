@@ -18,6 +18,7 @@ class _FakeBuilder:
     def __init__(self) -> None:
         self.language = "en"
         self.sections: list[str] = []
+        self.last_content: dict[str, str] | None = None
 
     def remove_section(self, name: str) -> None:
         self.sections = [s for s in self.sections if s != name]
@@ -25,6 +26,11 @@ class _FakeBuilder:
     def add_section(self, section: object) -> None:
         name = getattr(section, "name", "")
         self.sections.append(str(name))
+        content = getattr(section, "content", None)
+        if isinstance(content, dict):
+            self.last_content = {
+                str(k): str(v) for k, v in content.items()
+            }
 
 
 @pytest.mark.asyncio
@@ -282,6 +288,9 @@ async def test_unrelated_pytest_keeps_python_nudge() -> None:
     )
     await rail.before_model_call(MagicMock())
     assert "implement_completeness" in builder.sections
+    text = (builder.last_content or {}).get("en", "")
+    assert "test_<feature>.py" in text or "test_<feature>" in text
+    assert "compile errors" not in text.lower()
 
 
 @pytest.mark.asyncio

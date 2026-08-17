@@ -351,11 +351,14 @@ NATIVE_BUILD_NUDGE = (
 )
 
 PYTHON_SUITE_NUDGE = (
-    "You edited Python sources but have not run a real test suite. "
-    "`compileall`, `python -c`, or typecheck-only commands are not enough. "
-    "Discover and run the relevant tests via `bash` now — typically "
-    "`pytest` (or `python -m pytest`) on the package/tests you touched — "
-    "fix failures, and re-run until they pass before finishing."
+    "You edited Python sources but have not run a real test suite for this "
+    "feature. `compileall`, `python -c`, typecheck-only commands, and "
+    "pre-existing tests that already passed (for example `tests/test_monitor.py` "
+    "on a snapshot task) are not enough. Call `bash` with `pytest` / "
+    "`python -m pytest` targeting the new feature (`tests/test_<feature>.py` "
+    "or `pytest -k <feature>`). If those tests are not in the checkout yet, "
+    "add a focused test for the APIs the user named, run it, and fix failures "
+    "before finishing."
 )
 
 GO_SUITE_NUDGE = (
@@ -964,6 +967,79 @@ def _shared_api_stems(text: str, *, min_count: int = 2, min_len: int = 5) -> fro
     return frozenset(p for p, n in part_counts.items() if n >= min_count)
 
 
+_SCOPE_COMMAND_STOPWORDS = frozenset(
+    {
+        "pytest",
+        "python",
+        "python3",
+        "bash",
+        "cargo",
+        "compileall",
+        "edit_file",
+        "write_file",
+        "git",
+        "diff",
+        "head",
+        "npm",
+        "jest",
+        "mocha",
+        "vitest",
+        "tsc",
+        "eslint",
+    }
+)
+
+
+def _backticked_scope_tokens(text: str, *, min_len: int = 5) -> frozenset[str]:
+    """Feature identifiers quoted in the prompt (`` `aliases` ``, `` `capture_snapshot` ``)."""
+    found: set[str] = set()
+    for raw in re.findall(r"`([^`]+)`", text.lower()):
+        tok = _normalize_symbol_token(raw)
+        if not tok or any(ch in tok for ch in "/\\<>"):
+            continue
+        if " " in tok:
+            continue
+        if len(tok) < min_len or tok in _SYMBOL_STOPWORDS:
+            continue
+        if tok in _SCOPE_COMMAND_STOPWORDS:
+            continue
+        found.add(tok)
+        if "_" in tok:
+            for part in tok.split("_"):
+                if (
+                    len(part) >= min_len
+                    and part not in _SYMBOL_STOPWORDS
+                    and part not in _SCOPE_COMMAND_STOPWORDS
+                ):
+                    found.add(part)
+                    found.add(part.rstrip("s"))
+    return frozenset(found)
+
+
+def _feature_scope_keywords(text: str) -> frozenset[str]:
+    """Keywords that identify the *new* feature, not the host module.
+
+    Repeated English words like ``monitor`` in ``aiomonitor`` / ``Monitor``
+    must not make ``tests/test_monitor.py`` count as feature verification.
+    Prefer snake_case API stems and backticked identifiers; fall back to
+    repeated prompt words only when those are empty.
+    """
+    stems = _shared_api_stems(text)
+    quoted = _backticked_scope_tokens(text)
+    distinctive = frozenset(
+        kw
+        for kw in (stems | quoted)
+        if kw not in _SYMBOL_STOPWORDS and kw not in _SCOPE_COMMAND_STOPWORDS
+    )
+    if distinctive:
+        return distinctive
+    return frozenset(
+        kw
+        for kw in _repeated_task_keywords(text)
+        if kw not in _SCOPE_COMMAND_STOPWORDS
+    )
+
+
 def _keyword_in_command(keyword: str, command_lower: str) -> bool:
     """Match task keywords against pytest paths (snapshot ↔ snapshots)."""
     if keyword in command_lower:
@@ -1041,22 +1117,20 @@ def pytest_command_matches_task_scope(user_text: str, command: str) -> bool:
     """Return True when a targeted pytest run matches the task's feature area.
 
     When the prompt names a distinctive feature area, pytest must mention at
-    least one repeated keyword in the command, path, or ``-k`` expression.
-    Bare ``pytest -q`` against an unchanged base checkout is not enough — it
-    can pass while new fail-to-pass tests (added only at grading time) still
-    fail.
+    least one feature keyword in the command, path, or ``-k`` expression.
+    Bare ``pytest -q`` or pre-existing P2P files (``tests/test_monitor.py``
+    on a snapshot task) against an unchanged base checkout are not enough —
+    they can pass while new fail-to-pass tests (added only at grading time)
+    still fail.
     """
     if not user_text or not command or not looks_like_python_suite_command(command):
         return True
-    stem_keywords = _shared_api_stems(user_text)
-    repeated_keywords = _repeated_task_keywords(user_text)
-    keywords = stem_keywords | repeated_keywords
+    keywords = _feature_scope_keywords(user_text)
     if not keywords:
         return True
     lower = str(command).lower()
     if re.search(r"tests/test_[\w.-]+\.py", lower):
-        scoped = stem_keywords or repeated_keywords
-        return any(_keyword_in_command(kw, lower) for kw in scoped)
+        return any(_keyword_in_command(kw, lower) for kw in keywords)
     match = re.search(r"\b-k(?:=|\s+)(['\"]?)([\w.-]+)\1", lower)
     if match:
         expr = match.group(2)

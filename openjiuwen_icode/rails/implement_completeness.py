@@ -91,16 +91,22 @@ _NATIVE_BUILD_CN = (
 
 _PYTHON_SUITE_EN = (
     "## Python test suite required\n"
-    "You edited `.py` files. `compileall` / `python -c` are not enough — "
-    "discover and run the relevant tests via `bash` (`pytest` or "
-    "`python -m pytest` on the packages you touched), fix failures, and "
-    "re-run until they pass."
+    "You edited `.py` files. `compileall` / `python -c` are not enough, and "
+    "passing pre-existing tests that already passed at the base commit "
+    "(for example `tests/test_monitor.py` on a snapshot feature) is not "
+    "enough. Run `pytest` / `python -m pytest` targeting the new feature "
+    "(`tests/test_<feature>.py` or `pytest -k <feature>`). If those tests "
+    "are not in the checkout, add a focused test for the APIs the user "
+    "named, then fix failures and re-run until they pass."
 )
 
 _PYTHON_SUITE_CN = (
     "## 需要跑 Python 测试套件\n"
-    "你修改了 `.py` 文件。仅 `compileall` / `python -c` 不够——请用 `bash` "
-    "发现并运行相关测试（`pytest` 或 `python -m pytest`），修失败用例直到通过。"
+    "你修改了 `.py` 文件。仅 `compileall` / `python -c` 不够；只跑基线就已经"
+    "通过的旧测试（例如 snapshot 任务上的 `tests/test_monitor.py`）也不够——"
+    "请用 `bash` 针对新功能跑 `pytest`（`tests/test_<feature>.py` 或 "
+    "`pytest -k <feature>`）。若仓库里还没有这些测试，请先按用户点名的 API "
+    "补一条针对性测试，再修失败用例直到通过。"
 )
 
 _GO_SUITE_EN = (
@@ -282,13 +288,7 @@ class ImplementCompletenessRail(DeepAgentRail):
                     if ok is True:
                         if looks_like_native_build_command(result_cmd):
                             self._native_build_verified = True
-                        if looks_like_python_suite_command(result_cmd):
-                            self._python_suite_verified = True
-                        if looks_like_go_suite_command(result_cmd):
-                            self._go_suite_verified = True
-                        if looks_like_typescript_suite_command(result_cmd):
-                            self._typescript_suite_verified = True
-                        if verify_command_qualifies_for_completion(
+                        qualifies = verify_command_qualifies_for_completion(
                             result_cmd,
                             native_mutated=self._native_mutated,
                             python_mutated=self._python_mutated,
@@ -296,7 +296,20 @@ class ImplementCompletenessRail(DeepAgentRail):
                             typescript_mutated=self._typescript_mutated,
                             success=True,
                             user_text=self._user_text,
-                        ):
+                        )
+                        # Only mark language suites verified when the command
+                        # matches the task feature area. A passing P2P file
+                        # (tests/test_monitor.py on a snapshot task) must not
+                        # clear the Python-suite gate.
+                        if qualifies:
+                            if looks_like_python_suite_command(result_cmd):
+                                self._python_suite_verified = True
+                            if looks_like_go_suite_command(result_cmd):
+                                self._go_suite_verified = True
+                            if looks_like_typescript_suite_command(
+                                result_cmd
+                            ):
+                                self._typescript_suite_verified = True
                             self._verify_succeeded = True
                         else:
                             self._verify_succeeded = False

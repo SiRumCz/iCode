@@ -796,6 +796,46 @@ def test_snapshot_task_symbol_extraction_and_missing() -> None:
     assert pytest_command_matches_task_scope(
         task, "pytest -q tests/test_snapshot.py"
     )
+    assert pytest_command_matches_task_scope(
+        task, "pytest -q -k snapshot"
+    )
+
+
+def test_full_aiomonitor_instruction_rejects_p2p_pytest() -> None:
+    """DeepSWE snapshot prompt must not treat test_monitor.py as verification."""
+    task = (
+        "aiomonitor lacks the ability to capture and compare task state "
+        "over time.\n\n"
+        "Add snapshots to Monitor freezing running and terminated task "
+        "state. IDs auto-increment from 1 with optional name. "
+        "Monitor/start_monitor accept max_snapshots (default 10), "
+        "evicting oldest unnamed first, preserving named. Diff by task "
+        "object ID reports added, removed, common task items.\n\n"
+        "Monitor methods: capture_snapshot (async, optional name, "
+        "returns ID), list_snapshots, get_snapshot, delete_snapshot, "
+        "format_snapshot_task_list, format_snapshot_diff.\n\n"
+        "---\n"
+        "Execution rules for this DeepSWE eval:\n"
+        "5. After edits, discover and run this repo's real checks via "
+        "`bash` until they pass (Python: `pytest` on relevant tests).\n"
+    )
+    assert not pytest_command_matches_task_scope(task, "pytest -q")
+    assert not pytest_command_matches_task_scope(
+        task, "pytest -q tests/test_monitor.py"
+    )
+    assert pytest_command_matches_task_scope(
+        task, "pytest -q tests/test_snapshot.py"
+    )
+    assert (
+        verify_command_qualifies_for_completion(
+            "pytest -q tests/test_monitor.py",
+            native_mutated=False,
+            python_mutated=True,
+            success=True,
+            user_text=task,
+        )
+        is False
+    )
 
 
 def test_python_verify_requires_task_scoped_pytest() -> None:

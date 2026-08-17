@@ -475,18 +475,8 @@ class SessionHost:
                                                 cmd
                                             ):
                                                 native_build_verified = True
-                                            if looks_like_python_suite_command(
-                                                cmd
-                                            ):
-                                                python_suite_verified = True
-                                            if looks_like_go_suite_command(cmd):
-                                                go_suite_verified = True
-                                            if looks_like_typescript_suite_command(
-                                                cmd
-                                            ):
-                                                typescript_suite_verified = True
                                             workspace_ok = _workspace_deliverable()
-                                            if (
+                                            qualifies = (
                                                 workspace_ok
                                                 and verify_command_qualifies_for_completion(
                                                     cmd,
@@ -498,7 +488,20 @@ class SessionHost:
                                                     user_text=_task_text(),
                                                     workspace_mutated=workspace_ok,
                                                 )
-                                            ):
+                                            )
+                                            if qualifies:
+                                                if looks_like_python_suite_command(
+                                                    cmd
+                                                ):
+                                                    python_suite_verified = True
+                                                if looks_like_go_suite_command(
+                                                    cmd
+                                                ):
+                                                    go_suite_verified = True
+                                                if looks_like_typescript_suite_command(
+                                                    cmd
+                                                ):
+                                                    typescript_suite_verified = True
                                                 verify_succeeded = True
                                             else:
                                                 verify_succeeded = False
