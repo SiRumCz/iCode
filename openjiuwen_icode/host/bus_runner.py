@@ -219,6 +219,7 @@ async def run_via_bus(
     agent_text_parts: list[str] = []
     event_count = 0
     started = time.monotonic()
+    usage_summary: dict | None = None
 
     if workdir:
         from openjiuwen_icode.host.workdirs import (
@@ -325,10 +326,31 @@ async def run_via_bus(
                     await consumer
                 except asyncio.CancelledError:
                     pass
+            get_usage = getattr(host._backend, "get_usage", None)
+            if callable(get_usage):
+                try:
+                    usage_summary = get_usage()
+                except Exception:  # noqa: BLE001
+                    usage_summary = None
             await host.stop()
 
     duration = round(time.monotonic() - started, 3)
     result_text = "".join(agent_text_parts)
+
+    usage_payload = None
+    if isinstance(usage_summary, dict) and usage_summary:
+        usage_payload = {
+            "input_tokens": int(usage_summary.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage_summary.get("output_tokens", 0) or 0),
+            "total_tokens": int(usage_summary.get("total_tokens", 0) or 0),
+            "model_calls": int(usage_summary.get("model_calls", 0) or 0),
+            "last_input_tokens": int(
+                usage_summary.get("last_input_tokens", 0) or 0
+            ),
+            "last_output_tokens": int(
+                usage_summary.get("last_output_tokens", 0) or 0
+            ),
+        }
 
     if result_json:
         payload = {
@@ -336,6 +358,8 @@ async def run_via_bus(
             "result": result_text,
             "duration": duration,
         }
+        if usage_payload is not None:
+            payload["usage"] = usage_payload
         if failed:
             payload["ok"] = False
         print(json.dumps(payload, ensure_ascii=False))
@@ -347,6 +371,8 @@ async def run_via_bus(
             "chunks": event_count,
             "model": model_name,
         }
+        if usage_payload is not None:
+            output["usage"] = usage_payload
         print(json.dumps(output, ensure_ascii=False, indent=2))
 
     return 1 if failed else 0
