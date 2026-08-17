@@ -34,6 +34,9 @@ from openjiuwen_icode.sdk_compat import (
     call_with_supported_kwargs,
     load_concurrency_types,
 )
+from openjiuwen_icode.sdk_compat_cancel import (
+    patch_deep_agent_cancel_cycle,
+)
 from openjiuwen.harness.rails import (
     AskUserRail,
     ConfirmInterruptRail,
@@ -41,6 +44,9 @@ from openjiuwen.harness.rails import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Guard DeepAgent stall/abort cancel against asyncio Task.cancel cycles.
+patch_deep_agent_cancel_cycle()
 
 # Prefer iCode-vendored ripgrep before agent-core GrepTool resolves PATH.
 try:

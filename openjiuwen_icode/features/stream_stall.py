@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any, AsyncIterator, Awaitable, Callable
 
@@ -12,10 +13,39 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_STALL_SECONDS = 90.0
 DEFAULT_MAX_RETRIES = 3
+_ACLOSE_TIMEOUT_SECONDS = 5.0
 
 
 class StreamStallError(TimeoutError):
     """Raised when no stream chunk arrives within the idle window."""
+
+
+async def _safe_aclose(stream: Any) -> None:
+    """Close a stream without letting cancel-cycle bugs abort the process.
+
+    DeepAgent stream cancel can form an asyncio ``Task.cancel`` parent
+    cycle (``RecursionError``). Bound the wait and swallow that failure so
+    stall retries can reopen a fresh stream.
+    """
+    aclose = getattr(stream, "aclose", None)
+    if not callable(aclose):
+        return
+    try:
+        await asyncio.wait_for(aclose(), timeout=_ACLOSE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "stream aclose timed out after %.0fs; abandoning prior stream",
+            _ACLOSE_TIMEOUT_SECONDS,
+        )
+    except asyncio.CancelledError:
+        raise
+    except RecursionError:
+        logger.warning(
+            "stream aclose hit RecursionError (asyncio cancel cycle); "
+            "abandoning prior stream"
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("stream aclose failed", exc_info=True)
 
 
 async def iter_with_stall_retry(
@@ -33,6 +63,11 @@ async def iter_with_stall_retry(
     already arrived — common with long reasoning / tool-loop model calls.
     Callers should supply a continuation query on reopen via *open_stream*
     closure state so work is not blindly replayed from scratch.
+
+    Idle detection uses a sibling ``asyncio.Task`` for ``__anext__`` so a
+    stall timeout does not cancel the consumer task itself (which used to
+    inject ``CancelledError`` into DeepAgent and trigger a cancel-cycle
+    ``RecursionError``).
     """
     attempt = 0
     while True:
@@ -41,14 +76,31 @@ async def iter_with_stall_retry(
         stream = open_stream()
         try:
             while True:
+                anext_task = asyncio.create_task(stream.__anext__())
                 try:
-                    chunk = await asyncio.wait_for(
-                        stream.__anext__(),
+                    done, _pending = await asyncio.wait(
+                        {anext_task},
                         timeout=stall_seconds,
                     )
-                except StopAsyncIteration:
-                    return
-                except asyncio.TimeoutError as exc:
+                except asyncio.CancelledError:
+                    anext_task.cancel()
+                    with contextlib.suppress(
+                        asyncio.CancelledError, RecursionError, Exception
+                    ):
+                        await anext_task
+                    raise
+
+                if not done:
+                    anext_task.cancel()
+                    with contextlib.suppress(
+                        asyncio.CancelledError,
+                        RecursionError,
+                        StopAsyncIteration,
+                        Exception,
+                    ):
+                        await asyncio.wait_for(
+                            anext_task, timeout=_ACLOSE_TIMEOUT_SECONDS
+                        )
                     can_retry = attempt <= max_retries and (
                         received == 0 or retry_midstream
                     )
@@ -69,19 +121,19 @@ async def iter_with_stall_retry(
                     raise StreamStallError(
                         f"stream stalled after {received} chunks "
                         f"(idle {stall_seconds:.0f}s, attempt {attempt})"
-                    ) from exc
+                    )
+
+                try:
+                    chunk = anext_task.result()
+                except StopAsyncIteration:
+                    return
                 received += 1
                 yield chunk
             else:
                 return
             continue
         finally:
-            aclose = getattr(stream, "aclose", None)
-            if callable(aclose):
-                try:
-                    await aclose()
-                except Exception:  # noqa: BLE001
-                    pass
+            await _safe_aclose(stream)
 
 
 __all__ = [
