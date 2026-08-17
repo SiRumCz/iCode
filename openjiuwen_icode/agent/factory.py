@@ -716,9 +716,23 @@ class LocalBackend:
                 session=sid,
             )
 
+        async def _abort_before_retry(attempt: int, stall: float) -> None:
+            # Tear down prior DeepAgent task-loop / parallel tools before
+            # reopening; otherwise stall aclose leaves zombie gathers and
+            # orphan ToolCallStarts while the continuation runs.
+            _ = attempt, stall
+            try:
+                await self.abort()
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "abort before stream stall retry failed",
+                    exc_info=True,
+                )
+
         async for chunk in iter_with_stall_retry(
             _open,
             retry_midstream=True,
+            on_retry=_abort_before_retry,
         ):
             yield chunk
 
