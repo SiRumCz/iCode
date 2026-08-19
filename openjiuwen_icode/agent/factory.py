@@ -38,6 +38,7 @@ from openjiuwen_icode.sdk_compat import (
 from openjiuwen_icode.sdk_compat_cancel import (
     cancel_in_flight_agent_tasks,
     patch_cancel_cycle_guards,
+    wait_abandon,
 )
 from openjiuwen.harness.rails import (
     AskUserRail,
@@ -724,11 +725,10 @@ class LocalBackend:
             # orphan ToolCallStarts while the continuation runs.
             _ = attempt, stall
             try:
-                await asyncio.wait_for(self.abort(), timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "abort before stream stall retry timed out after 5s"
+                abort_task = asyncio.create_task(
+                    self.abort(), name="stall-abort"
                 )
+                await wait_abandon(abort_task, timeout=5.0)
             except Exception:  # noqa: BLE001
                 logger.debug(
                     "abort before stream stall retry failed",

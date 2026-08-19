@@ -34,6 +34,65 @@ _CANCEL_GUARD: set[int] = set()
 _PATCHED = False
 
 
+def detach_task_waiter(task: asyncio.Task) -> None:
+    """Drop ``_fut_waiter`` so ``Task.cancel`` cannot walk a parent cycle.
+
+    CPython ``Task.cancel`` is immutable, so we cannot patch it. Clearing
+    the waiter first makes cancel() a local flag flip instead of unbounded
+    ``child.cancel()`` recursion (obsidian-linter stall abort).
+
+    Non-Task waiters (Events, I/O futures) are cancelled so the task can
+    still wake. Peer Tasks are left alone — the caller detaches every
+    victim before abandoning the set.
+    """
+    waiter = None
+    try:
+        waiter = task._fut_waiter  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        waiter = None
+    try:
+        task._fut_waiter = None  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+    if waiter is None or isinstance(waiter, asyncio.Task):
+        return
+    try:
+        waiter.cancel()
+    except RecursionError:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def wait_abandon(
+    tasks: asyncio.Task | Iterable[asyncio.Task],
+    *,
+    timeout: float,
+) -> None:
+    """Wait up to *timeout* seconds without ``wait_for`` cancel-on-expiry.
+
+    ``asyncio.wait_for`` fires ``Timeout._on_timeout`` → ``task.cancel()``.
+    If that task is in a waiter cycle, cancel RecursionErrors in the timer
+    callback and ``wait_for`` never resumes — the 5400s Pier hang.
+    ``asyncio.wait`` times out without cancelling.
+    """
+    if isinstance(tasks, asyncio.Task):
+        pending_set = {tasks}
+    else:
+        pending_set = {task for task in tasks if task is not None}
+    pending_set = {task for task in pending_set if not task.done()}
+    if not pending_set:
+        return
+    _done, leftover = await asyncio.wait(pending_set, timeout=timeout)
+    if leftover:
+        logger.warning(
+            "abandoning %s leftover tasks after %.1fs "
+            "(not cancelling; Task.cancel waiter cycle)",
+            len(leftover),
+            timeout,
+        )
+
+
 def patch_deep_agent_cancel_cycle() -> bool:
     """Patch DeepAgent cancel helper if it lacks a self-await guard.
 
@@ -54,40 +113,27 @@ def patch_deep_agent_cancel_cycle() -> bool:
     if original is None:
         return False
 
-    # Prefer the upstream fix when present (source mentions current_task).
-    try:
-        import inspect
-
-        src = inspect.getsource(original)
-    except Exception:  # noqa: BLE001
-        src = ""
-    if "current_task" in src and "RecursionError" in src:
-        _PATCHED_DEEP_AGENT = True
-        _PATCHED = True
-        return True
-
     async def _cancel_stream_process_task(self) -> None:
         task = self._stream_process_task
         if task is None or task.done():
             return
+        detach_task_waiter(task)
         if task is asyncio.current_task():
-            task.cancel()
+            try:
+                task.cancel()
+            except RecursionError:
+                logger.warning(
+                    "RecursionError self-cancelling stream process task"
+                )
             return
-        task.cancel()
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            task.cancel()
         except RecursionError:
             logger.warning(
-                "RecursionError while awaiting cancelled stream process "
-                "task; leaving task for the event loop"
+                "RecursionError cancelling stream process task; abandoning"
             )
-        except Exception:
-            logger.debug(
-                "stream process task raised during cancel",
-                exc_info=True,
-            )
+            return
+        await wait_abandon(task, timeout=5.0)
 
     DeepAgent._cancel_stream_process_task = _cancel_stream_process_task
     _PATCHED_DEEP_AGENT = True
@@ -228,6 +274,8 @@ async def cancel_in_flight_agent_tasks(
     if not victims:
         return
     for task in victims:
+        detach_task_waiter(task)
+    for task in victims:
         try:
             task.cancel()
         except RecursionError:
@@ -237,24 +285,15 @@ async def cancel_in_flight_agent_tasks(
             )
         except Exception:  # noqa: BLE001
             logger.debug("cancel leftover task failed", exc_info=True)
-    try:
-        await asyncio.wait_for(
-            asyncio.gather(*victims, return_exceptions=True),
-            timeout=timeout,
-        )
-    except (asyncio.TimeoutError, RecursionError):
-        logger.warning(
-            "timed out or RecursionError waiting for %s leftover agent tasks",
-            len(victims),
-        )
-    except Exception:  # noqa: BLE001
-        logger.debug("gather leftover agent tasks failed", exc_info=True)
+    await wait_abandon(victims, timeout=timeout)
 
 
 __all__ = [
     "cancel_in_flight_agent_tasks",
+    "detach_task_waiter",
     "patch_cancel_all_tasks",
     "patch_cancel_cycle_guards",
     "patch_deep_agent_cancel_cycle",
     "patch_task_cancel_cycle",
+    "wait_abandon",
 ]

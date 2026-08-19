@@ -5,9 +5,13 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from typing import Any, AsyncIterator, Awaitable, Callable
+
+from openjiuwen_icode.sdk_compat_cancel import (
+    detach_task_waiter,
+    wait_abandon,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,18 +29,19 @@ async def _safe_aclose(stream: Any) -> None:
 
     DeepAgent stream cancel can form an asyncio ``Task.cancel`` parent
     cycle (``RecursionError``). Bound the wait and swallow that failure so
-    stall retries can reopen a fresh stream.
+    stall retries can reopen a fresh stream. Must not use ``wait_for``:
+    its timer callback ``task.cancel()`` hangs forever on a waiter cycle.
     """
     aclose = getattr(stream, "aclose", None)
     if not callable(aclose):
         return
     try:
-        await asyncio.wait_for(aclose(), timeout=_ACLOSE_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "stream aclose timed out after %.0fs; abandoning prior stream",
-            _ACLOSE_TIMEOUT_SECONDS,
-        )
+        closer = asyncio.ensure_future(aclose())
+    except Exception:  # noqa: BLE001
+        logger.debug("stream aclose schedule failed", exc_info=True)
+        return
+    try:
+        await wait_abandon(closer, timeout=_ACLOSE_TIMEOUT_SECONDS)
     except asyncio.CancelledError:
         raise
     except RecursionError:
@@ -83,24 +88,27 @@ async def iter_with_stall_retry(
                         timeout=stall_seconds,
                     )
                 except asyncio.CancelledError:
-                    anext_task.cancel()
-                    with contextlib.suppress(
-                        asyncio.CancelledError, RecursionError, Exception
-                    ):
-                        await anext_task
+                    detach_task_waiter(anext_task)
+                    try:
+                        anext_task.cancel()
+                    except RecursionError:
+                        pass
+                    await wait_abandon(
+                        anext_task, timeout=_ACLOSE_TIMEOUT_SECONDS
+                    )
                     raise
 
                 if not done:
-                    anext_task.cancel()
-                    with contextlib.suppress(
-                        asyncio.CancelledError,
-                        RecursionError,
-                        StopAsyncIteration,
-                        Exception,
-                    ):
-                        await asyncio.wait_for(
-                            anext_task, timeout=_ACLOSE_TIMEOUT_SECONDS
+                    detach_task_waiter(anext_task)
+                    try:
+                        anext_task.cancel()
+                    except RecursionError:
+                        logger.warning(
+                            "RecursionError cancelling stalled __anext__; abandoning"
                         )
+                    await wait_abandon(
+                        anext_task, timeout=_ACLOSE_TIMEOUT_SECONDS
+                    )
                     can_retry = attempt <= max_retries and (
                         received == 0 or retry_midstream
                     )

@@ -112,3 +112,32 @@ async def test_cancel_in_flight_agent_tasks_cancels_tool_named() -> None:
     await asyncio.sleep(0)
     await cancel_patch.cancel_in_flight_agent_tasks(timeout=1.0)
     assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_wait_abandon_returns_on_cancel_cycle() -> None:
+    """Must not hang when leftover tasks form a Task.cancel waiter cycle.
+
+    wait_for + Timeout._on_timeout → cancel() RecursionError left the
+    obsidian-linter eval blocked until the 5400s Pier agent timeout.
+    """
+    import time
+
+    ta: asyncio.Task | None = None
+    tb: asyncio.Task | None = None
+
+    async def _a() -> None:
+        assert tb is not None
+        await tb
+
+    async def _b() -> None:
+        assert ta is not None
+        await ta
+
+    ta = asyncio.create_task(_a(), name="tool:bash:cycle-a")
+    tb = asyncio.create_task(_b(), name="tool:bash:cycle-b")
+    await asyncio.sleep(0)
+    started = time.monotonic()
+    await cancel_patch.cancel_in_flight_agent_tasks(timeout=0.3)
+    elapsed = time.monotonic() - started
+    assert elapsed < 2.0
