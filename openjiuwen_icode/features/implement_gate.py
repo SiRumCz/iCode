@@ -362,10 +362,12 @@ PYTHON_SUITE_NUDGE = (
     "You edited Python sources but have not run a real test suite for this "
     "feature. `compileall`, `python -c`, typecheck-only commands, and "
     "pre-existing tests that already passed (for example `tests/test_monitor.py` "
-    "on a snapshot task) are not enough. Call `bash` with `pytest` / "
-    "`python -m pytest` targeting the new feature (`tests/test_<feature>.py` "
-    "or `pytest -k <feature>`). If those tests are not in the checkout yet, "
-    "add a focused test for the APIs the user named, run it, and fix failures "
+    "on a snapshot task) are not enough. Tests you wrote this session alone "
+    "are not enough either — run the project's existing integration/functional "
+    "tests (`tests/functional/`, `pytest -k <feature>`) or invoke the CLI "
+    "entrypoint you changed with representative flags. Call `bash` with "
+    "`pytest` / `python -m pytest` targeting the new feature "
+    "(`tests/test_<feature>.py` or `pytest -k <feature>`). Fix failures "
     "before finishing."
 )
 
@@ -784,6 +786,29 @@ def is_full_typescript_suite_command(command: str) -> bool:
     return False
 
 
+def is_full_python_suite_command(command: str) -> bool:
+    """Return True when *command* runs a repo-wide Python test suite.
+
+    Single-file pytest targets (including agent-authored ``test_*.py``) do
+    not count — they can pass while hidden fail-to-pass tests still fail.
+    """
+    if not command or not looks_like_python_suite_command(command):
+        return False
+    lower = str(command).lower().strip()
+    if re.search(r"tests/(?:[\w.-]+/)*test_[\w.-]+\.py", lower):
+        return False
+    if re.search(r"\b-k(?:=|\s+)(['\"]?)([\w.-]+)\1", lower):
+        return False
+    if re.search(r"\btests(?:/[\w.-]+)*/?\b", lower):
+        return True
+    if re.fullmatch(
+        r"(?:python(?:3(?:\.\d+)?)?\s+-m\s+)?pytest(?:\s|$)",
+        lower,
+    ):
+        return True
+    return False
+
+
 def verify_command_targets_agent_authored_tests(
     command: str,
     agent_created_test_names: frozenset[str] | set[str],
@@ -792,6 +817,8 @@ def verify_command_targets_agent_authored_tests(
     if not command or not agent_created_test_names:
         return False
     if is_full_typescript_suite_command(command):
+        return False
+    if is_full_python_suite_command(command):
         return False
     lower = str(command).lower()
     for name in agent_created_test_names:
@@ -828,7 +855,15 @@ def verify_command_qualifies_for_completion(
     if python_mutated and not native_mutated:
         if not looks_like_python_suite_command(command):
             return False
-        if user_text and not pytest_command_matches_task_scope(user_text, command):
+        if verify_command_targets_agent_authored_tests(
+            command, agent_created_test_names
+        ):
+            return False
+        if not user_text or not pytest_command_matches_task_scope(
+            user_text, command
+        ):
+            return False
+        if not python_cli_integration_verify_matches(user_text, command):
             return False
     # Pure-Go edits: require go test, not go build / go vet alone.
     if go_mutated and not native_mutated:
@@ -1244,6 +1279,35 @@ def go_command_matches_task_scope(user_text: str, command: str) -> bool:
     return any(_keyword_in_command(kw, lower) for kw in keywords)
 
 
+def _cli_flag_count(text: str) -> int:
+    """Count distinct CLI-style flags named in an implement prompt."""
+    return len(set(re.findall(r"--[a-z][\w-]+", str(text or "").lower())))
+
+
+def python_cli_integration_verify_matches(
+    user_text: str, command: str
+) -> bool:
+    """Return True when verify covers CLI/integration behavior on flag-heavy tasks.
+
+    Prompts that name many CLI flags usually need ``tests/functional/`` or a
+    direct module/CLI invocation — not only unit tests the agent added.
+    """
+    if not user_text or not command:
+        return True
+    if _cli_flag_count(user_text) < 4:
+        return True
+    lower = str(command).lower()
+    if re.search(r"tests/(?:[\w.-]+/)*functional/", lower):
+        return True
+    if re.search(
+        r"\bpython(?:3(?:\.\d+)?)?\s+-m\s+(?!pytest\b)[\w.]+\b", lower
+    ):
+        return True
+    if re.search(r"(?:^|\s)[\w.-]+\s+--[\w-]", lower):
+        return True
+    return False
+
+
 def pytest_command_matches_task_scope(user_text: str, command: str) -> bool:
     """Return True when a targeted pytest run matches the task's feature area.
 
@@ -1260,7 +1324,7 @@ def pytest_command_matches_task_scope(user_text: str, command: str) -> bool:
     if not keywords:
         return True
     lower = str(command).lower()
-    if re.search(r"tests/test_[\w.-]+\.py", lower):
+    if re.search(r"tests/(?:[\w.-]+/)*test_[\w.-]+\.py", lower):
         return any(_keyword_in_command(kw, lower) for kw in keywords)
     match = re.search(r"\b-k(?:=|\s+)(['\"]?)([\w.-]+)\1", lower)
     if match:
@@ -1571,7 +1635,9 @@ __all__ = [
     "extract_bash_command_from_result",
     "extract_required_prompt_symbols",
     "is_go_source_path",
+    "is_full_python_suite_command",
     "is_full_typescript_suite_command",
+    "python_cli_integration_verify_matches",
     "is_typescript_source_path",
     "is_headless_continuation_nudge",
     "is_wrapped_implement_continuation_query",

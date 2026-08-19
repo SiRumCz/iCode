@@ -267,24 +267,29 @@ class ImplementCompletenessRail(DeepAgentRail):
                 self._typescript_mutated = True
                 self._typescript_suite_verified = False
             path = mutation_path_from_args(args)
-            if (
-                name in {"write_file", "Write", "write"}
-                and path
-                and re.search(
-                    r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)$",
-                    str(path).lower(),
-                )
-            ):
+            if name in {"write_file", "Write", "write"} and path:
                 from pathlib import Path as _Path
 
+                lower = str(path).lower()
                 base = _Path(str(path)).name.lower()
-                self._agent_created_test_names.add(base)
-                match = re.match(
-                    r"^(.*)\.(?:test|spec)\.(?:ts|tsx|js|jsx)$",
-                    base,
-                )
-                if match:
-                    self._agent_created_test_names.add(match.group(1))
+                if re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)$", lower):
+                    self._agent_created_test_names.add(base)
+                    match = re.match(
+                        r"^(.*)\.(?:test|spec)\.(?:ts|tsx|js|jsx)$",
+                        base,
+                    )
+                    if match:
+                        self._agent_created_test_names.add(match.group(1))
+                elif re.search(r"(?:^|/)test_[\w.-]+\.py$", lower) or re.search(
+                    r"(?:^|/)[\w.-]+_test\.py$", lower
+                ):
+                    self._agent_created_test_names.add(base)
+                    if base.startswith("test_") and base.endswith(".py"):
+                        self._agent_created_test_names.add(base[5:-3])
+                    elif base.endswith("_test.py"):
+                        self._agent_created_test_names.add(
+                            base[: -len("_test.py")]
+                        )
             if tool_is_edit_existing(name):
                 self._integration_attempted = True
             # Keep blob tracking available for future rail use.

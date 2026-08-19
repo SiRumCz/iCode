@@ -304,16 +304,25 @@ class MutationTracker:
             if mut.kind != "create" or not self._path_under_workspace(mut.path):
                 continue
             lower = mut.path.lower()
-            if not re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)$", lower):
+            if re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)$", lower):
+                base = Path(mut.path).name.lower()
+                names.add(base)
+                match = re.match(
+                    r"^(.*)\.(?:test|spec)\.(?:ts|tsx|js|jsx)$",
+                    base,
+                )
+                if match:
+                    names.add(match.group(1))
                 continue
-            base = Path(mut.path).name.lower()
-            names.add(base)
-            match = re.match(
-                r"^(.*)\.(?:test|spec)\.(?:ts|tsx|js|jsx)$",
-                base,
-            )
-            if match:
-                names.add(match.group(1))
+            if re.search(r"(?:^|/)test_[\w.-]+\.py$", lower) or re.search(
+                r"(?:^|/)[\w.-]+_test\.py$", lower
+            ):
+                base = Path(mut.path).name.lower()
+                names.add(base)
+                if base.startswith("test_") and base.endswith(".py"):
+                    names.add(base[5:-3])
+                elif base.endswith("_test.py"):
+                    names.add(base[: -len("_test.py")])
         return frozenset(names)
 
     def list_turns(self) -> list[TurnMutations]:

@@ -217,6 +217,10 @@ def test_python_suite_required_for_pure_python_edits() -> None:
             native_mutated=False,
             python_mutated=True,
             success=True,
+            user_text=(
+                "Add snapshot support with capture_snapshot. "
+                "Snapshots snapshots snapshots."
+            ),
         )
         is True
     )
@@ -973,6 +977,70 @@ def test_python_verify_requires_task_scoped_pytest() -> None:
         )
         is True
     )
+    assert (
+        verify_command_qualifies_for_completion(
+            "pytest -q tests/test_snapshot.py",
+            native_mutated=False,
+            python_mutated=True,
+            success=True,
+            user_text="",
+        )
+        is False
+    )
+
+
+def test_python_scope_rejects_agent_authored_cache_tests() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        is_full_python_suite_command,
+        python_cli_integration_verify_matches,
+        verify_command_targets_agent_authored_tests,
+    )
+
+    task = (
+        "CLI must support --incremental/--no-incremental, --cache-dir, "
+        "--cache-size-limit, --warm-cache, and --cache-stats. "
+        "JSON metrics output must include cache_hits and cache_misses. "
+        "incremental_analysis.enabled must be read from config."
+    )
+    agent_tests = frozenset({"test_cache.py", "test_cache"})
+    cmd = "python -m pytest tests/unit/core/test_cache.py -v"
+    assert verify_command_targets_agent_authored_tests(cmd, agent_tests)
+    assert not is_full_python_suite_command(cmd)
+    assert not verify_command_qualifies_for_completion(
+        cmd,
+        native_mutated=False,
+        python_mutated=True,
+        success=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    suite_cmd = "python -m pytest tests/ -q"
+    assert is_full_python_suite_command(suite_cmd)
+    assert not verify_command_targets_agent_authored_tests(
+        suite_cmd, agent_tests
+    )
+    assert not python_cli_integration_verify_matches(
+        task, "python -m pytest tests/unit/ -q"
+    )
+    assert python_cli_integration_verify_matches(
+        task, "python -m pytest tests/functional/ -q"
+    )
+    assert python_cli_integration_verify_matches(
+        task, "python -m bandit --incremental --cache-dir /tmp/c issue.py"
+    )
+
+
+def test_nested_pytest_path_matches_task_scope() -> None:
+    task = (
+        "Add incremental cache with cache_hits and cache_misses metrics. "
+        "incremental incremental incremental."
+    )
+    assert pytest_command_matches_task_scope(
+        task, "pytest tests/functional/test_incremental_cli.py"
+    )
+    assert not pytest_command_matches_task_scope(
+        task, "pytest tests/unit/core/test_util.py"
+    )
 
 
 def test_bare_pytest_rejected_when_task_has_feature_keywords() -> None:
@@ -984,6 +1052,51 @@ def test_bare_pytest_rejected_when_task_has_feature_keywords() -> None:
     assert not pytest_command_matches_task_scope(task, "pytest -q")
     assert pytest_command_matches_task_scope(
         task, "pytest -q tests/integration/morphing/test_aliases.py"
+    )
+
+
+def test_typescript_scope_rejects_agent_only_initialize_tests() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        is_full_typescript_suite_command,
+        typescript_command_matches_task_scope,
+        verify_command_qualifies_for_completion,
+        verify_command_targets_agent_authored_tests,
+    )
+
+    task = (
+        "Add support for asynchronous initialization of container registrations "
+        "with automatic dependency-aware startup ordering.\n\n"
+        "Call container.initialize({ concurrency: 5 })."
+    )
+    agent_tests = frozenset(
+        {"container.initialize.test.ts", "container.initialize"}
+    )
+    assert verify_command_targets_agent_authored_tests(
+        "npx jest src/__tests__/container.initialize.test.ts", agent_tests
+    )
+    assert verify_command_targets_agent_authored_tests(
+        "npx jest container.initialize", agent_tests
+    )
+    assert not verify_command_targets_agent_authored_tests(
+        "npm test -- --runInBand", agent_tests
+    )
+    assert is_full_typescript_suite_command("npm test -- --runInBand")
+    assert typescript_command_matches_task_scope(task, "npm test -- --runInBand")
+    assert not verify_command_qualifies_for_completion(
+        "npx jest src/__tests__/container.initialize.test.ts",
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    assert verify_command_qualifies_for_completion(
+        "npm test -- --runInBand",
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
     )
 
 

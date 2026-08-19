@@ -153,6 +153,29 @@ def test_agent_created_test_names_tracks_new_test_files(tmp_path: Path) -> None:
     assert "container.initialize" in names
 
 
+def test_agent_created_test_names_tracks_python_test_files(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    test_file = ws / "tests" / "unit" / "core" / "test_cache.py"
+    test_file.parent.mkdir(parents=True)
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("s")
+    tracker.record_tool_mutation(
+        "write_file",
+        {
+            "file_path": str(test_file),
+            "content": "def test_x():\n    assert True\n",
+        },
+    )
+    test_file.write_text("def test_x():\n    assert True\n", encoding="utf-8")
+    tracker.refresh_after_hashes()
+
+    names = tracker.agent_created_test_names()
+    assert "test_cache.py" in names
+    assert "cache" in names
+
+
 def test_path_under_workspace(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
