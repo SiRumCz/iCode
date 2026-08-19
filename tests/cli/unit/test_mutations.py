@@ -130,6 +130,29 @@ def test_has_deliverable_workspace_changes_counts_committed_edits(
     assert tracker.has_deliverable_workspace_changes() is True
 
 
+def test_agent_created_test_names_tracks_new_test_files(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    test_file = ws / "src" / "__tests__" / "container.initialize.test.ts"
+    test_file.parent.mkdir(parents=True)
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("s")
+    tracker.record_tool_mutation(
+        "write_file",
+        {
+            "file_path": str(test_file),
+            "content": "test('x', () => {})\n",
+        },
+    )
+    test_file.write_text("test('x', () => {})\n", encoding="utf-8")
+    tracker.refresh_after_hashes()
+
+    names = tracker.agent_created_test_names()
+    assert "container.initialize.test.ts" in names
+    assert "container.initialize" in names
+
+
 def test_path_under_workspace(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()

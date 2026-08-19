@@ -491,6 +491,11 @@ class SessionHost:
                                                     success=True,
                                                     user_text=_task_text(),
                                                     workspace_mutated=workspace_ok,
+                                                    agent_created_test_names=(
+                                                        self._mutations.agent_created_test_names()
+                                                        if self._mutations
+                                                        else frozenset()
+                                                    ),
                                                 )
                                             )
                                             if qualifies:

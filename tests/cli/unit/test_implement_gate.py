@@ -128,6 +128,8 @@ def test_verify_and_submit_command_detection() -> None:
     assert looks_like_verify_command("./python -c \"import ast; assert True\"")
     assert looks_like_verify_command("python -m pytest -q")
     assert looks_like_verify_command("python3 -m compileall Lib/typing.py")
+    assert looks_like_verify_command("npx jest --runInBand")
+    assert looks_like_verify_command("npx jest container.initialize")
     assert looks_like_native_build_command("make -j2")
     assert looks_like_native_build_command("make -j4 Objects/typevarobject.o")
     assert looks_like_native_build_command("cargo check -p foo")
@@ -368,7 +370,7 @@ def test_typescript_suite_required_for_pure_ts_edits() -> None:
         "Add support for asynchronous container initialization with "
         "initializer() and initialize(). initializer initializer initialize."
     )
-    assert not typescript_command_matches_task_scope(task, "npm test")
+    assert typescript_command_matches_task_scope(task, "npm test")
     assert typescript_command_matches_task_scope(
         task, "npm test -- async-initialization"
     )
@@ -402,7 +404,10 @@ def test_typescript_suite_required_for_pure_ts_edits() -> None:
 
 def test_typescript_scope_rejects_agent_only_initialize_tests() -> None:
     from openjiuwen_icode.features.implement_gate import (
+        is_full_typescript_suite_command,
         typescript_command_matches_task_scope,
+        verify_command_qualifies_for_completion,
+        verify_command_targets_agent_authored_tests,
     )
 
     task = (
@@ -410,14 +415,35 @@ def test_typescript_scope_rejects_agent_only_initialize_tests() -> None:
         "with automatic dependency-aware startup ordering.\n\n"
         "Call container.initialize({ concurrency: 5 })."
     )
-    assert not typescript_command_matches_task_scope(
-        task, "npx jest src/__tests__/container.initialize.test.ts"
+    agent_tests = frozenset(
+        {"container.initialize.test.ts", "container.initialize"}
     )
-    assert typescript_command_matches_task_scope(
-        task, "npx jest src/__tests__/async-initialization.test.ts"
+    assert verify_command_targets_agent_authored_tests(
+        "npx jest src/__tests__/container.initialize.test.ts", agent_tests
     )
-    assert typescript_command_matches_task_scope(
-        task, "npm test -- async-initialization"
+    assert verify_command_targets_agent_authored_tests(
+        "npx jest container.initialize", agent_tests
+    )
+    assert not verify_command_targets_agent_authored_tests(
+        "npm test -- --runInBand", agent_tests
+    )
+    assert is_full_typescript_suite_command("npm test -- --runInBand")
+    assert typescript_command_matches_task_scope(task, "npm test -- --runInBand")
+    assert not verify_command_qualifies_for_completion(
+        "npx jest src/__tests__/container.initialize.test.ts",
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    assert verify_command_qualifies_for_completion(
+        "npm test -- --runInBand",
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
     )
 
 

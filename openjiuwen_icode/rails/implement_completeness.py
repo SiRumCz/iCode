@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from openjiuwen_icode.features.implement_gate import (
     mutation_args_touch_python,
     mutation_args_touch_typescript,
     mutation_args_under_workspace,
+    mutation_path_from_args,
     mutation_text_from_args,
     primary_user_task_text,
     tool_is_edit_existing,
@@ -199,6 +201,7 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._go_suite_verified = False
         self._typescript_mutated = False
         self._typescript_suite_verified = False
+        self._agent_created_test_names: set[str] = set()
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -222,6 +225,7 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._go_suite_verified = False
         self._typescript_mutated = False
         self._typescript_suite_verified = False
+        self._agent_created_test_names = set()
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
@@ -262,6 +266,25 @@ class ImplementCompletenessRail(DeepAgentRail):
             if mutation_args_touch_typescript(args):
                 self._typescript_mutated = True
                 self._typescript_suite_verified = False
+            path = mutation_path_from_args(args)
+            if (
+                name in {"write_file", "Write", "write"}
+                and path
+                and re.search(
+                    r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)$",
+                    str(path).lower(),
+                )
+            ):
+                from pathlib import Path as _Path
+
+                base = _Path(str(path)).name.lower()
+                self._agent_created_test_names.add(base)
+                match = re.match(
+                    r"^(.*)\.(?:test|spec)\.(?:ts|tsx|js|jsx)$",
+                    base,
+                )
+                if match:
+                    self._agent_created_test_names.add(match.group(1))
             if tool_is_edit_existing(name):
                 self._integration_attempted = True
             # Keep blob tracking available for future rail use.
@@ -296,6 +319,9 @@ class ImplementCompletenessRail(DeepAgentRail):
                             typescript_mutated=self._typescript_mutated,
                             success=True,
                             user_text=self._user_text,
+                            agent_created_test_names=frozenset(
+                                self._agent_created_test_names
+                            ),
                         )
                         # Only mark language suites verified when the command
                         # matches the task feature area. A passing P2P file

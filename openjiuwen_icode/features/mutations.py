@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -293,6 +294,27 @@ class MutationTracker:
         time, so committed edits must count as deliverable.
         """
         return self.has_workspace_changes()
+
+    def agent_created_test_names(self) -> frozenset[str]:
+        """Basenames/stems of test files created during the open turn."""
+        if self._current is None:
+            return frozenset()
+        names: set[str] = set()
+        for mut in self._current.files:
+            if mut.kind != "create" or not self._path_under_workspace(mut.path):
+                continue
+            lower = mut.path.lower()
+            if not re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)$", lower):
+                continue
+            base = Path(mut.path).name.lower()
+            names.add(base)
+            match = re.match(
+                r"^(.*)\.(?:test|spec)\.(?:ts|tsx|js|jsx)$",
+                base,
+            )
+            if match:
+                names.add(match.group(1))
+        return frozenset(names)
 
     def list_turns(self) -> list[TurnMutations]:
         return list(self._turns)

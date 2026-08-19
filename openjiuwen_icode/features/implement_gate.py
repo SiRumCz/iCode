@@ -381,10 +381,10 @@ GO_SUITE_NUDGE = (
 TS_SUITE_NUDGE = (
     "You edited TypeScript sources but have not run a real test suite. "
     "`tsc --noEmit`, `npm run build`, or typecheck-only commands are not "
-    "enough. Call `bash` now with targeted `npm test`, `jest`, `mocha`, or "
-    "`vitest` on the tests you touched (for example "
-    "`npm test -- async-initialization`), fix failures, and re-run until "
-    "they pass before finishing."
+    "enough. Do not treat test files you wrote this session as sufficient "
+    "verification — run the project's full suite via `bash` (`npm test` or "
+    "`npx jest --runInBand`), fix failures, and re-run until they pass "
+    "before finishing."
 )
 
 
@@ -553,6 +553,8 @@ def looks_like_verify_command(command: str) -> bool:
     if not command or not str(command).strip():
         return False
     lower = str(command).lower()
+    if re.search(r"\bjest\b", lower):
+        return True
     if any(hint in lower for hint in _VERIFY_HINTS):
         return True
     # CPython / autotools: make (interpreter or object rebuild).
@@ -755,6 +757,54 @@ def looks_like_typescript_suite_command(command: str) -> bool:
     return False
 
 
+def is_full_typescript_suite_command(command: str) -> bool:
+    """Return True when *command* runs the repo-wide JS/TS test suite."""
+    if not command or not str(command).strip():
+        return False
+    lower = str(command).lower().strip()
+    if re.search(r"\bnpm test\b", lower):
+        if re.search(r"\.test\.(?:ts|tsx|js|jsx)\b", lower):
+            return False
+        match = re.search(r"\bnpm test\b(?:\s+--)?\s*(.*)$", lower)
+        rest = (match.group(1) if match else "").strip()
+        if not rest or rest in {"--", "--runinband"}:
+            return True
+        if re.fullmatch(r"-?-runinband", rest):
+            return True
+        return False
+    if re.search(r"\b(?:npx\s+)?jest\b", lower):
+        if re.search(r"\.test\.(?:ts|tsx|js|jsx)\b", lower):
+            return False
+        if re.search(r"--testpathignorepatterns=", lower):
+            return True
+        if re.search(r"(?:--runinband|--run-in-band)\b", lower):
+            return True
+        if re.fullmatch(r"(?:npx\s+)?jest", lower):
+            return True
+    return False
+
+
+def verify_command_targets_agent_authored_tests(
+    command: str,
+    agent_created_test_names: frozenset[str] | set[str],
+) -> bool:
+    """Return True when *command* verifies only tests the agent created this turn."""
+    if not command or not agent_created_test_names:
+        return False
+    if is_full_typescript_suite_command(command):
+        return False
+    lower = str(command).lower()
+    for name in agent_created_test_names:
+        token = str(name or "").strip().lower()
+        if not token:
+            continue
+        base = Path(token).name if "/" in token or "\\" in token else token
+        stem = Path(base).stem if "." in base else base
+        if base in lower or stem in lower:
+            return True
+    return False
+
+
 def verify_command_qualifies_for_completion(
     command: str,
     *,
@@ -765,6 +815,7 @@ def verify_command_qualifies_for_completion(
     typescript_mutated: bool = False,
     user_text: str = "",
     workspace_mutated: bool = True,
+    agent_created_test_names: frozenset[str] | set[str] = frozenset(),
 ) -> bool:
     """Return True when a successful verify command completes the verify gate."""
     if not workspace_mutated:
@@ -788,6 +839,10 @@ def verify_command_qualifies_for_completion(
     # Pure-TypeScript edits: require a real suite, not tsc/build alone.
     if typescript_mutated and not native_mutated:
         if not looks_like_typescript_suite_command(command):
+            return False
+        if verify_command_targets_agent_authored_tests(
+            command, agent_created_test_names
+        ):
             return False
         if user_text and not typescript_command_matches_task_scope(
             user_text, command
@@ -1114,44 +1169,6 @@ def _feature_scope_keywords(text: str) -> frozenset[str]:
     )
 
 
-def _title_compound_keywords(text: str) -> frozenset[str]:
-    """Hyphenated feature phrases from the task title (e.g. async-initialization)."""
-    if not text or not str(text).strip():
-        return frozenset()
-    first = str(text).strip().split("\n", 1)[0].lower()
-    found: set[str] = set()
-    for m in re.finditer(
-        r"\b(?:async|asynchronous)\s+([a-z][a-z0-9_-]{3,})\b", first
-    ):
-        tail = m.group(1)
-        found.add(f"async-{tail}")
-        found.add(tail)
-        found.add("async")
-    for raw in re.findall(r"`([^`]+)`", text.lower()):
-        tok = _normalize_symbol_token(raw)
-        if "-" in tok and len(tok) >= 8:
-            found.add(tok)
-    for m in re.finditer(
-        r"\b([a-z][a-z0-9]*(?:-[a-z][a-z0-9_-]+)+)\b", first
-    ):
-        found.add(m.group(1))
-    return frozenset(found)
-
-
-def _compound_in_command(compound: str, command_lower: str) -> bool:
-    """Match title feature phrases without substring roots like initia→initialize."""
-    if not compound or not command_lower:
-        return False
-    if compound in command_lower:
-        return True
-    if "-" not in compound:
-        return False
-    parts = [part for part in compound.split("-") if len(part) >= 4]
-    if len(parts) < 2:
-        return False
-    return all(part in command_lower for part in parts)
-
-
 def _keyword_in_command(keyword: str, command_lower: str) -> bool:
     """Match task keywords against pytest paths (snapshot ↔ snapshots)."""
     if keyword in command_lower:
@@ -1174,34 +1191,26 @@ def typescript_command_matches_task_scope(user_text: str, command: str) -> bool:
         command
     ):
         return True
+    if is_full_typescript_suite_command(command):
+        return True
     stem_keywords = _shared_api_stems(user_text)
     repeated_keywords = _repeated_task_keywords(user_text)
-    compound_keywords = _title_compound_keywords(user_text)
     keywords = stem_keywords | repeated_keywords
-    if not keywords and not compound_keywords:
+    if not keywords:
         return True
     lower = str(command).lower()
     match = re.search(r"\b(?:-t|--testNamePattern=)(['\"]?)([\w.-]+)\1", lower)
     if match:
         expr = match.group(2)
-        if compound_keywords:
-            if any(_compound_in_command(c, expr) for c in compound_keywords):
-                return True
-            return False
         return any(_keyword_in_command(kw, expr) for kw in keywords)
-    if re.search(r"__tests__/[\w./-]+\.test\.(?:ts|tsx|js)", lower) or re.search(
-        r"\.test\.(?:ts|tsx|js)\b", lower
-    ):
-        if compound_keywords:
-            if any(_compound_in_command(c, lower) for c in compound_keywords):
-                return True
-            return False
+    if re.search(r"__tests__/[\w./-]+\.test\.(?:ts|tsx|js)", lower):
+        scoped = stem_keywords or repeated_keywords
+        return any(_keyword_in_command(kw, lower) for kw in scoped)
+    if re.search(r"\.test\.(?:ts|tsx|js)\b", lower):
         scoped = stem_keywords or repeated_keywords
         return any(_keyword_in_command(kw, lower) for kw in scoped)
     if re.search(r"\b(?:describe|it)\(['\"][^'\"]+['\"]", lower):
         return any(_keyword_in_command(kw, lower) for kw in keywords)
-    if compound_keywords:
-        return any(_compound_in_command(c, lower) for c in compound_keywords)
     # Bare repo-wide npm test against an unchanged base is not enough.
     return any(_keyword_in_command(kw, lower) for kw in keywords)
 
@@ -1562,6 +1571,7 @@ __all__ = [
     "extract_bash_command_from_result",
     "extract_required_prompt_symbols",
     "is_go_source_path",
+    "is_full_typescript_suite_command",
     "is_typescript_source_path",
     "is_headless_continuation_nudge",
     "is_wrapped_implement_continuation_query",
@@ -1591,6 +1601,7 @@ __all__ = [
     "prompt_symbol_nudge",
     "pytest_command_matches_task_scope",
     "typescript_command_matches_task_scope",
+    "verify_command_targets_agent_authored_tests",
     "task_requires_submit",
     "tool_is_edit_existing",
     "tool_is_write_file",
