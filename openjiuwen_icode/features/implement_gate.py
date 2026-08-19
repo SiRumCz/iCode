@@ -365,10 +365,12 @@ PYTHON_SUITE_NUDGE = (
     "on a snapshot task) are not enough. Tests you wrote this session alone "
     "are not enough either — run the project's existing integration/functional "
     "tests (`tests/functional/`, `pytest -k <feature>`) or invoke the CLI "
-    "entrypoint you changed with representative flags. Call `bash` with "
-    "`pytest` / `python -m pytest` targeting the new feature "
-    "(`tests/test_<feature>.py` or `pytest -k <feature>`). Fix failures "
-    "before finishing."
+    "entrypoint you changed with representative flags. Prefer the repo's "
+    "canonical runner (`python -m stestr run` on OpenStack-style projects, "
+    "`python -m pytest tests/` elsewhere) without piping through `head`/`tail`/"
+    "`grep` so failures are visible. Do not install a fake `pytest` shim into "
+    "site-packages when the project ships `stestr`. Call `bash` with a full "
+    "suite command, fix failures, and re-run until it passes before finishing."
 )
 
 GO_SUITE_NUDGE = (
@@ -706,6 +708,10 @@ def looks_like_python_suite_command(command: str) -> bool:
     # CPython's own regrtest driver.
     if re.search(r"(?:\./)?python(?:3(?:\.\d+)?)?\s+-m\s+test\b", lower):
         return True
+    if re.search(r"\bstestr\b", lower) or re.search(
+        r"python(?:3(?:\.\d+)?)?\s+-m\s+stestr\b", lower
+    ):
+        return True
     if re.search(r"\btox\b", lower) or re.search(r"\bnox\b", lower):
         return True
     return False
@@ -799,6 +805,14 @@ def is_full_python_suite_command(command: str) -> bool:
         return False
     if re.search(r"\b-k(?:=|\s+)(['\"]?)([\w.-]+)\1", lower):
         return False
+    # ``stestr run tests.unit.foo`` is targeted; bare ``stestr run`` is full.
+    if re.search(r"\bstestr\s+run\b", lower):
+        match = re.search(r"\bstestr\s+run(?:\s+([^|&;]+))?", lower)
+        tail = (match.group(1) if match else "") or ""
+        tail = re.sub(r"\s+2>&1.*$", "", tail).strip()
+        if not tail:
+            return True
+        return False
     if re.search(r"\btests(?:/[\w.-]+)*/?\b", lower):
         return True
     if re.fullmatch(
@@ -859,7 +873,7 @@ def verify_command_qualifies_for_completion(
             command, agent_created_test_names
         ):
             return False
-        if not user_text or not pytest_command_matches_task_scope(
+        if not user_text or not python_suite_command_matches_task_scope(
             user_text, command
         ):
             return False
@@ -974,6 +988,30 @@ def bash_output_indicates_failure(result: Any) -> bool:
     if re.search(r"^--- FAIL:", blob, re.MULTILINE):
         return True
     if re.search(r"^FAIL\s+\S", blob, re.MULTILINE):
+        return True
+
+    # Python import / runner bootstrap failures (often masked by ``| head``).
+    if re.search(r"No module named ['\"]?\w+", blob):
+        return True
+    if "ModuleNotFoundError" in blob or "ImportError:" in blob:
+        return True
+
+    # stestr / testtools summaries and per-test failures.
+    if re.search(r"^\s*-\s+Failed:\s*[1-9]\d*\b", blob, re.MULTILINE):
+        return True
+    if "Failures during discovery" in blob:
+        return True
+    if "Failed to import test module" in blob:
+        return True
+    if re.search(r"^Failed \d+ tests\b", blob, re.MULTILINE):
+        return True
+    if re.search(r"\]\s*\.\.\.\s*FAILED\b", blob):
+        return True
+
+    # unittest / pytest-shim summaries.
+    if re.search(r"^FAILED\s+\(", blob, re.MULTILINE):
+        return True
+    if re.search(r"^Ran \d+ tests in .+\n\nFAILED\b", blob, re.MULTILINE):
         return True
 
     return False
@@ -1333,6 +1371,33 @@ def pytest_command_matches_task_scope(user_text: str, command: str) -> bool:
     return any(_keyword_in_command(kw, lower) for kw in keywords)
 
 
+def stestr_command_matches_task_scope(user_text: str, command: str) -> bool:
+    """Return True when a stestr run matches the task's feature area."""
+    if not user_text or not command:
+        return True
+    lower = str(command).lower()
+    if "stestr" not in lower:
+        return True
+    keywords = _feature_scope_keywords(user_text)
+    if not keywords:
+        return True
+    match = re.search(r"\bstestr\s+run(?:\s+([^\s|&;]+))?", lower)
+    if match and (match.group(1) or "").strip():
+        target = match.group(1).strip().strip("'\"")
+        return any(_keyword_in_command(kw, target) for kw in keywords)
+    return any(_keyword_in_command(kw, lower) for kw in keywords)
+
+
+def python_suite_command_matches_task_scope(user_text: str, command: str) -> bool:
+    """Scope check for pytest, stestr, or unittest suite commands."""
+    if not looks_like_python_suite_command(command):
+        return True
+    lower = str(command).lower()
+    if "stestr" in lower:
+        return stestr_command_matches_task_scope(user_text, command)
+    return pytest_command_matches_task_scope(user_text, command)
+
+
 def extract_required_prompt_symbols(text: str) -> tuple[str, ...]:
     """Pull API / flag names the user likely expects to appear in the patch."""
     if not text or not str(text).strip():
@@ -1666,6 +1731,8 @@ __all__ = [
     "primary_user_task_text",
     "prompt_symbol_nudge",
     "pytest_command_matches_task_scope",
+    "python_suite_command_matches_task_scope",
+    "stestr_command_matches_task_scope",
     "typescript_command_matches_task_scope",
     "verify_command_targets_agent_authored_tests",
     "task_requires_submit",

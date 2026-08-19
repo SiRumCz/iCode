@@ -325,6 +325,34 @@ class MutationTracker:
                     names.add(base[: -len("_test.py")])
         return frozenset(names)
 
+    def record_bash_created_path(self, path: str) -> FileMutation | None:
+        """Record a test file likely created via bash redirection/heredoc."""
+        if self._current is None or not path:
+            return None
+        abs_path = self._resolve(path)
+        rel = str(abs_path)
+        if not self._path_under_workspace(rel) or not _is_test_file_path(rel):
+            return None
+        for mut in self._current.files:
+            if mut.path == rel:
+                return None
+        before_hash = ""
+        kind = "create"
+        after_hash = ""
+        after_snap = ""
+        if abs_path.is_file():
+            after_hash = _file_hash(abs_path)
+            after_snap = self._snapshot_file(abs_path, "after")
+        mut = FileMutation(
+            path=rel,
+            kind=kind,
+            before_hash=before_hash,
+            after_hash=after_hash,
+            snapshot_after=after_snap,
+        )
+        self._current.files.append(mut)
+        return mut
+
     def list_turns(self) -> list[TurnMutations]:
         return list(self._turns)
 
@@ -482,6 +510,30 @@ def _git_checkout_file(workspace: Path, path: str) -> bool:
     return proc.returncode == 0
 
 
+def _is_test_file_path(path: str) -> bool:
+    """Return True when *path* looks like a test module path."""
+    lower = str(path).lower()
+    if re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)$", lower):
+        return True
+    if re.search(r"(?:^|/)test_[\w.-]+\.py$", lower) or re.search(
+        r"(?:^|/)[\w.-]+_test\.py$", lower
+    ):
+        return True
+    return False
+
+
+def test_paths_from_bash_command(command: str) -> tuple[str, ...]:
+    """Extract test file paths from bash redirection/heredoc writes."""
+    if not command or not str(command).strip():
+        return ()
+    found: list[str] = []
+    for match in re.finditer(r"(?:cat\s+)?>\s*([^\s|&;<>\"']+)", str(command)):
+        path = match.group(1).strip()
+        if path and _is_test_file_path(path) and path not in found:
+            found.append(path)
+    return tuple(found)
+
+
 __all__ = [
     "FileMutation",
     "MUTATING_TOOLS",
@@ -490,5 +542,6 @@ __all__ = [
     "mutation_path_from_args",
     "mutating_tool_applied",
     "path_under_workspace",
+    "test_paths_from_bash_command",
     "tool_result_payload",
 ]

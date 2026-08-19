@@ -329,6 +329,7 @@ class SessionHost:
             from openjiuwen_icode.features.mutations import (
                 MUTATING_TOOLS,
                 mutating_tool_applied,
+                test_paths_from_bash_command,
                 tool_result_payload,
             )
             from openjiuwen_icode.features.stream_stall import (
@@ -412,6 +413,13 @@ class SessionHost:
                                         verify_attempted = True
                                     if looks_like_submit_command(cmd):
                                         submit_attempted = True
+                                    if self._mutations:
+                                        for path in test_paths_from_bash_command(
+                                            cmd
+                                        ):
+                                            self._mutations.record_bash_created_path(
+                                                path
+                                            )
                                 if self._mutations:
                                     self._mutations.record_tool_mutation(
                                         ev.tool_name, ev.tool_args

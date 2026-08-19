@@ -536,6 +536,97 @@ def test_bash_result_detects_pytest_and_go_failures_in_stdout() -> None:
     assert bash_result_succeeded(go_fail) is False
 
 
+def test_bash_result_detects_missing_pytest_and_stestr_failures() -> None:
+    missing_pytest = (
+        "Command: cd /app && python -m pytest tests/unit/core/test_x.py -v 2>&1 | head -120\n"
+        "Stdout: /usr/local/bin/python: No module named pytest\n\n"
+        "Stderr: (empty)\nExit Code: 0"
+    )
+    assert bash_result_succeeded(missing_pytest) is False
+    assert bash_result_succeeded(missing_pytest, tool_success=True) is False
+
+    stestr_discovery = (
+        "Command: cd /app && python -m stestr run tests/unit/core/test_x.py 2>&1 | tail -60\n"
+        "Stdout: =========================\nFailures during discovery\n"
+        "=========================\nFailed to import test module: tests.unit.core.test_x\n"
+        "ModuleNotFoundError: No module named 'pytest'\nExit Code: 0"
+    )
+    assert bash_result_succeeded(stestr_discovery) is False
+
+    stestr_failed = (
+        "Command: cd /app && python -m stestr run 2>&1 | grep Passed\n"
+        "Stdout: Ran: 78 tests in 0.05 sec.\n - Passed: 75\n - Failed: 3\n"
+        "Exit Code: 0"
+    )
+    assert bash_result_succeeded(stestr_failed) is False
+
+    stestr_ok = (
+        "Command: cd /app && python -m stestr run 2>&1 | tail -5\n"
+        "Stdout: Ran: 318 tests in 6.3 sec.\n - Passed: 318\n - Failed: 0\n"
+        "Exit Code: 0"
+    )
+    assert bash_result_succeeded(stestr_ok) is True
+
+
+def test_stestr_is_python_suite_and_scope() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        is_full_python_suite_command,
+        looks_like_python_suite_command,
+        python_suite_command_matches_task_scope,
+        stestr_command_matches_task_scope,
+        verify_command_qualifies_for_completion,
+    )
+
+    assert looks_like_python_suite_command("python -m stestr run")
+    assert is_full_python_suite_command("cd /app && python -m stestr run")
+    assert not is_full_python_suite_command(
+        "python -m stestr run tests.unit.core.test_nosec_directives"
+    )
+
+    task = (
+        "Add nosec-begin/end/next-line directives. nosec region nosec metrics "
+        "nosec selector parsing for nosec suppression."
+    )
+    assert not stestr_command_matches_task_scope(task, "python -m stestr run")
+    assert stestr_command_matches_task_scope(
+        task, "python -m stestr run tests.unit.core.test_nosec_directives"
+    )
+    assert not python_suite_command_matches_task_scope(task, "python -m stestr run")
+    assert not verify_command_qualifies_for_completion(
+        "python -m stestr run",
+        native_mutated=False,
+        python_mutated=True,
+        success=True,
+        user_text=task,
+    )
+    assert verify_command_qualifies_for_completion(
+        "python -m stestr run tests.unit.core.test_nosec_directives",
+        native_mutated=False,
+        python_mutated=True,
+        success=True,
+        user_text=task,
+    )
+
+
+def test_stestr_rejects_agent_authored_target_from_bash() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        verify_command_qualifies_for_completion,
+        verify_command_targets_agent_authored_tests,
+    )
+
+    agent_tests = frozenset({"test_nosec_directives.py", "nosec_directives"})
+    cmd = "python -m stestr run tests.unit.core.test_nosec_directives"
+    assert verify_command_targets_agent_authored_tests(cmd, agent_tests)
+    assert not verify_command_qualifies_for_completion(
+        cmd,
+        native_mutated=False,
+        python_mutated=True,
+        success=True,
+        user_text="Add nosec-begin/end/next-line directives.",
+        agent_created_test_names=agent_tests,
+    )
+
+
 def test_shallow_signature_edit_option_to_vec() -> None:
     old = "    pub config: Option<PathBuf>,\n"
     new = "    pub config: Vec<String>,\n"
