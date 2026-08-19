@@ -130,8 +130,8 @@ _TS_SUITE_EN = (
     "## TypeScript tests required\n"
     "You edited `.ts` / `.tsx` files. `tsc --noEmit`, `npm run build`, and "
     "lint-only commands do not run tests — call `bash` with targeted "
-    "`npm test`, `jest`, `mocha`, or `vitest` on the tests you touched, "
-    "fix failures, and re-run until they pass."
+    "`deno task test` / `deno test …/test/` (Deno) or `npm test`, `jest`, "
+    "`mocha`, or `vitest` (Node), fix failures, and re-run until they pass."
 )
 
 _TS_SUITE_CN = (

@@ -350,6 +350,10 @@ def test_typescript_suite_required_for_pure_ts_edits() -> None:
     assert looks_like_typescript_suite_command("yarn test src/__tests__/foo.test.ts")
     assert not looks_like_typescript_suite_command("tsc --noEmit")
     assert not looks_like_typescript_suite_command("npm run build")
+    assert looks_like_typescript_suite_command(
+        "deno test --allow-env --allow-read command/test/"
+    )
+    assert looks_like_typescript_suite_command("deno task test:deno-v2")
 
     assert (
         verify_command_qualifies_for_completion(
@@ -534,6 +538,104 @@ def test_bash_result_detects_pytest_and_go_failures_in_stdout() -> None:
         "FAIL\texample.com/pkg\t0.01s\nExit Code: 0"
     )
     assert bash_result_succeeded(go_fail) is False
+
+
+def test_deno_test_commands_clear_typescript_verify_gate() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        TS_SUITE_NUDGE,
+        is_full_typescript_suite_command,
+        looks_like_deno_test_command,
+        looks_like_typescript_suite_command,
+        looks_like_verify_command,
+        next_implement_continuation,
+        verify_command_qualifies_for_completion,
+        verify_command_targets_agent_authored_tests,
+    )
+
+    full_suite = (
+        "cd /app && deno test --allow-run=deno --allow-env --allow-read "
+        "--allow-write=./ --parallel command/test/"
+    )
+    agent_only = (
+        "cd /app && deno test --allow-env --allow-read --allow-write=./ "
+        "command/test/command/config_test.ts"
+    )
+    task = (
+        "Add config file parsing to Command with config() and getConfigValues(). "
+        "Support JSON and rc formats with config config config."
+    )
+    agent_tests = frozenset({"config_test.ts", "config_test"})
+
+    assert looks_like_deno_test_command(full_suite)
+    assert looks_like_verify_command(full_suite)
+    assert looks_like_typescript_suite_command(full_suite)
+    assert is_full_typescript_suite_command(full_suite)
+    assert is_full_typescript_suite_command("deno task test:deno-v2")
+    assert not is_full_typescript_suite_command(agent_only)
+    assert verify_command_targets_agent_authored_tests(agent_only, agent_tests)
+    assert not verify_command_targets_agent_authored_tests(
+        full_suite, agent_tests
+    )
+    assert verify_command_qualifies_for_completion(
+        full_suite,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    assert not verify_command_qualifies_for_completion(
+        agent_only,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    assert (
+        next_implement_continuation(
+            user_text=task,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
+            submit_attempted=False,
+            shallow_only=False,
+            typescript_mutated=True,
+            typescript_suite_verified=True,
+        )
+        is None
+    )
+    assert (
+        next_implement_continuation(
+            user_text=task,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=False,
+            typescript_mutated=True,
+            typescript_suite_verified=False,
+        )
+        == TS_SUITE_NUDGE
+    )
+
+
+def test_bash_result_detects_deno_failure_with_piped_zero_exit() -> None:
+    piped_fail = (
+        "Command: cd /app && deno test command/test/ 2>&1 | tail -15\n"
+        "Stdout: ok | 330 passed | 5 failed (1s)\n"
+        "Stderr: (empty)\n"
+        "Exit Code: 0"
+    )
+    assert bash_result_succeeded(piped_fail) is False
+
+    piped_pass = (
+        "Command: cd /app && deno test command/test/ 2>&1 | tail -10\n"
+        "Stdout: ok | 335 passed | 0 failed (1s)\n"
+        "Stderr: (empty)\n"
+        "Exit Code: 0"
+    )
+    assert bash_result_succeeded(piped_pass) is True
 
 
 def test_bash_result_detects_missing_pytest_and_stestr_failures() -> None:

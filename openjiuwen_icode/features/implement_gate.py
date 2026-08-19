@@ -386,9 +386,10 @@ TS_SUITE_NUDGE = (
     "You edited TypeScript sources but have not run a real test suite. "
     "`tsc --noEmit`, `npm run build`, or typecheck-only commands are not "
     "enough. Do not treat test files you wrote this session as sufficient "
-    "verification — run the project's full suite via `bash` (`npm test` or "
-    "`npx jest --runInBand`), fix failures, and re-run until they pass "
-    "before finishing."
+    "verification — run the project's full suite via `bash` (Deno repos: "
+    "`deno task test` or `deno test` on the module's `test/` tree; Node "
+    "repos: `npm test` or `npx jest --runInBand`), fix failures, and re-run "
+    "until they pass before finishing."
 )
 
 
@@ -572,6 +573,9 @@ def looks_like_verify_command(command: str) -> bool:
         return True
     if re.search(r"(?:\./)?python(?:3(?:\.\d+)?)?\s+-m\b", lower):
         return True
+    # Deno / Cliffy-style TypeScript workspaces.
+    if looks_like_deno_test_command(command):
+        return True
     return False
 
 
@@ -717,6 +721,14 @@ def looks_like_python_suite_command(command: str) -> bool:
     return False
 
 
+def looks_like_deno_test_command(command: str) -> bool:
+    """Return True when *command* runs Deno tests (``deno test`` / ``deno task test``)."""
+    if not command or not str(command).strip():
+        return False
+    lower = str(command).lower()
+    return bool(re.search(r"\bdeno\s+(?:task\s+)?test\b", lower))
+
+
 def looks_like_go_suite_command(command: str) -> bool:
     """Return True when *command* runs Go tests.
 
@@ -762,6 +774,8 @@ def looks_like_typescript_suite_command(command: str) -> bool:
         return True
     if re.search(r"\bvitest\b", lower):
         return True
+    if looks_like_deno_test_command(command):
+        return True
     return False
 
 
@@ -788,6 +802,22 @@ def is_full_typescript_suite_command(command: str) -> bool:
         if re.search(r"(?:--runinband|--run-in-band)\b", lower):
             return True
         if re.fullmatch(r"(?:npx\s+)?jest", lower):
+            return True
+    if looks_like_deno_test_command(command):
+        # Project tasks (``deno task test``, ``test:deno-v2``, …) run the
+        # repo's canonical suite from ``deno.json``.
+        if re.search(r"\bdeno\s+task\s+test\b", lower):
+            return True
+        # Single-file targets (including agent-authored ``*_test.ts``) are not
+        # enough — hidden fail-to-pass tests may only exist at grading time.
+        if re.search(
+            r"[\w./-]+_(?:test|spec)\.(?:ts|tsx|js|jsx)\b", lower
+        ):
+            return False
+        if re.search(r"[\w./-]+\.(?:test|spec)\.(?:ts|tsx|js|jsx)\b", lower):
+            return False
+        # Directory suites such as ``deno test … command/test/``.
+        if re.search(r"/(?:test|tests)/", lower):
             return True
     return False
 
@@ -988,6 +1018,14 @@ def bash_output_indicates_failure(result: Any) -> bool:
     if re.search(r"^--- FAIL:", blob, re.MULTILINE):
         return True
     if re.search(r"^FAIL\s+\S", blob, re.MULTILINE):
+        return True
+
+    # deno test summary (``ok | 335 passed | 5 failed (1s)``).
+    if re.search(r"\|\s*[1-9]\d*\s+failed\b", blob):
+        return True
+    if re.search(r"^FAILURES\b", blob, re.MULTILINE):
+        return True
+    if re.search(r"\.\.\.\s*FAILED\b", blob):
         return True
 
     # Python import / runner bootstrap failures (often masked by ``| head``).
@@ -1282,6 +1320,13 @@ def typescript_command_matches_task_scope(user_text: str, command: str) -> bool:
     if re.search(r"\.test\.(?:ts|tsx|js)\b", lower):
         scoped = stem_keywords or repeated_keywords
         return any(_keyword_in_command(kw, lower) for kw in scoped)
+    if re.search(r"_(?:test|spec)\.(?:ts|tsx|js|jsx)\b", lower):
+        scoped = stem_keywords or repeated_keywords
+        return any(_keyword_in_command(kw, lower) for kw in scoped)
+    if re.search(r"/(?:test|tests)/", lower) and looks_like_deno_test_command(
+        command
+    ):
+        return True
     if re.search(r"\b(?:describe|it)\(['\"][^'\"]+['\"]", lower):
         return any(_keyword_in_command(kw, lower) for kw in keywords)
     # Bare repo-wide npm test against an unchanged base is not enough.
@@ -1710,6 +1755,7 @@ __all__ = [
     "is_python_source_path",
     "is_shallow_signature_edit",
     "go_command_matches_task_scope",
+    "looks_like_deno_test_command",
     "looks_like_explore_bash",
     "looks_like_git_archaeology",
     "looks_like_go_suite_command",
