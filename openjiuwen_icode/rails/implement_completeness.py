@@ -113,17 +113,19 @@ _PYTHON_SUITE_CN = (
 
 _GO_SUITE_EN = (
     "## Go tests required\n"
-    "You edited `.go` files. `go build` / `go vet` do not run tests — "
-    "call `bash` with targeted `go test` on the packages you touched "
-    "(for example `go test ./evaluator -count=1`), fix failures, and "
-    "re-run until they pass. Do not leave build output binaries in the repo."
+    "You edited `.go` files. `go build` / `go vet` do not run tests, and "
+    "passing only `*_test.go` files you wrote this session is not enough. "
+    "Call `bash` with `go test ./... -count=1` or multiple touched packages, "
+    "fix failures, and re-run until they pass. Do not leave build output "
+    "binaries in the repo."
 )
 
 _GO_SUITE_CN = (
     "## 需要跑 Go 测试\n"
-    "你修改了 `.go` 文件。`go build` / `go vet` 不会跑测试——请用 `bash` "
-    "对改动包执行 `go test`（例如 `go test ./evaluator -count=1`），"
-    "修失败用例直到通过。不要把编译产物二进制留在仓库里。"
+    "你修改了 `.go` 文件。`go build` / `go vet` 不会跑测试；仅跑本回合"
+    "新建的 `*_test.go` 也不够。请用 `bash` 执行 `go test ./... -count=1` "
+    "或对多个改动包跑 `go test`，修失败用例直到通过。不要把编译产物"
+    "二进制留在仓库里。"
 )
 
 _TS_SUITE_EN = (
@@ -290,6 +292,13 @@ class ImplementCompletenessRail(DeepAgentRail):
                         self._agent_created_test_names.add(
                             base[: -len("_test.py")]
                         )
+                elif re.search(r"(?:^|/)[\w.-]+_test\.go$", lower):
+                    self._agent_created_test_names.add(base)
+                    if base.endswith("_test.go"):
+                        self._agent_created_test_names.add(base[: -len("_test.go")])
+                    rel_dir = str(_Path(str(path)).parent).replace("\\", "/").lower()
+                    if rel_dir and rel_dir != ".":
+                        self._agent_created_test_names.add(rel_dir)
             if tool_is_edit_existing(name):
                 self._integration_attempted = True
             # Keep blob tracking available for future rail use.

@@ -176,6 +176,32 @@ def test_agent_created_test_names_tracks_python_test_files(tmp_path: Path) -> No
     assert "cache" in names
 
 
+def test_agent_created_test_names_tracks_go_test_files(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    test_file = ws / "parsing" / "html" / "html_test.go"
+    test_file.parent.mkdir(parents=True)
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("s")
+    tracker.record_tool_mutation(
+        "write_file",
+        {
+            "file_path": str(test_file),
+            "content": "package html\n\nfunc TestX(t *testing.T) {}\n",
+        },
+    )
+    test_file.write_text(
+        "package html\n\nfunc TestX(t *testing.T) {}\n", encoding="utf-8"
+    )
+    tracker.refresh_after_hashes()
+
+    names = tracker.agent_created_test_names()
+    assert "html_test.go" in names
+    assert "html" in names
+    assert "parsing/html" in names
+
+
 def test_bash_created_test_paths_are_tracked(tmp_path: Path) -> None:
     from openjiuwen_icode.features.mutations import test_paths_from_bash_command
 

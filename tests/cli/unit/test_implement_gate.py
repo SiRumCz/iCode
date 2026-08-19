@@ -824,7 +824,7 @@ def test_go_command_matches_task_scope() -> None:
         "When a call omits trailing arguments, assign default values. "
         "Invalid declarations should use `invalid default argument declaration`."
     )
-    assert not go_command_matches_task_scope(task, "go test ./... -count=1")
+    assert go_command_matches_task_scope(task, "go test ./... -count=1")
     assert go_command_matches_task_scope(
         task, "go test ./vm -run TestDefaultArguments -count=1"
     )
@@ -846,7 +846,7 @@ def test_go_verify_requires_task_scoped_go_test() -> None:
         "Add default argument values. Default default default arguments "
         "arguments arguments arguments."
     )
-    assert not go_command_matches_task_scope(task, "go test ./...")
+    assert go_command_matches_task_scope(task, "go test ./...")
     assert (
         verify_command_qualifies_for_completion(
             "go test ./...",
@@ -855,8 +855,9 @@ def test_go_verify_requires_task_scoped_go_test() -> None:
             success=True,
             user_text=task,
         )
-        is False
+        is True
     )
+    assert not go_command_matches_task_scope(task, "go test -count=1")
     assert (
         verify_command_qualifies_for_completion(
             "go test ./vm -run Default -count=1",
@@ -866,6 +867,74 @@ def test_go_verify_requires_task_scoped_go_test() -> None:
             user_text=task,
         )
         is True
+    )
+
+
+def test_go_scope_rejects_agent_authored_html_tests() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        GO_SUITE_NUDGE,
+        is_full_go_suite_command,
+        go_command_matches_task_scope,
+        verify_command_targets_agent_authored_tests,
+    )
+
+    task = (
+        "Dasel should support HTML documents as a format named html. "
+        "Documents normalize to include head and body. The writer escapes "
+        "entities with named entities like &quot;. html html html."
+    )
+    agent_tests = frozenset(
+        {"html_test.go", "html", "parsing/html"}
+    )
+    pkg_cmd = "go test ./parsing/html/ -count=1"
+    suite_cmd = "go clean -testcache && go test ./... -count=1"
+    assert verify_command_targets_agent_authored_tests(pkg_cmd, agent_tests)
+    assert not verify_command_targets_agent_authored_tests(suite_cmd, agent_tests)
+    assert is_full_go_suite_command(suite_cmd)
+    assert not is_full_go_suite_command(pkg_cmd)
+    assert go_command_matches_task_scope(task, suite_cmd)
+    assert go_command_matches_task_scope(task, pkg_cmd)
+    assert not verify_command_qualifies_for_completion(
+        pkg_cmd,
+        native_mutated=False,
+        go_mutated=True,
+        success=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    assert verify_command_qualifies_for_completion(
+        suite_cmd,
+        native_mutated=False,
+        go_mutated=True,
+        success=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    assert (
+        next_implement_continuation(
+            user_text=task,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=True,
+            submit_attempted=False,
+            shallow_only=False,
+            go_mutated=True,
+            go_suite_verified=True,
+        )
+        is None
+    )
+    assert (
+        next_implement_continuation(
+            user_text=task,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=False,
+            go_mutated=True,
+            go_suite_verified=False,
+        )
+        == GO_SUITE_NUDGE
     )
 
 

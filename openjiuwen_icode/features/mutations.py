@@ -323,6 +323,23 @@ class MutationTracker:
                     names.add(base[5:-3])
                 elif base.endswith("_test.py"):
                     names.add(base[: -len("_test.py")])
+                continue
+            if re.search(r"(?:^|/)[\w.-]+_test\.go$", lower):
+                base = Path(mut.path).name.lower()
+                names.add(base)
+                if base.endswith("_test.go"):
+                    names.add(base[: -len("_test.go")])
+                try:
+                    rel = str(
+                        Path(mut.path)
+                        .resolve()
+                        .relative_to(self.workspace.resolve())
+                    )
+                except ValueError:
+                    rel = mut.path
+                rel_dir = str(Path(rel).parent).replace("\\", "/").lower()
+                if rel_dir and rel_dir != ".":
+                    names.add(rel_dir)
         return frozenset(names)
 
     def record_bash_created_path(self, path: str) -> FileMutation | None:
@@ -518,6 +535,8 @@ def _is_test_file_path(path: str) -> bool:
     if re.search(r"(?:^|/)test_[\w.-]+\.py$", lower) or re.search(
         r"(?:^|/)[\w.-]+_test\.py$", lower
     ):
+        return True
+    if re.search(r"(?:^|/)[\w.-]+_test\.go$", lower):
         return True
     return False
 

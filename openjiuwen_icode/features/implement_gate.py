@@ -374,12 +374,13 @@ PYTHON_SUITE_NUDGE = (
 )
 
 GO_SUITE_NUDGE = (
-    "You edited Go sources but have not run `go test` on the packages you "
-    "touched. `go build` / `go vet` compile or lint only — they do not run "
-    "tests. Call `bash` now with a targeted `go test` (for example "
-    "`go test ./evaluator ./parser -count=1`), fix failures, and re-run "
-    "until tests pass. Do not leave build output binaries (e.g. `./main`, "
-    "`./abs`) in the repo — use `/tmp` or remove them before finishing."
+    "You edited Go sources but have not run a real test suite. "
+    "`go build` / `go vet` compile or lint only — they do not run tests, "
+    "and tests you wrote this session alone are not enough. Call `bash` now "
+    "with `go test ./... -count=1` (full repo suite) or multiple packages "
+    "you touched, fix failures, and re-run until they pass. Do not verify "
+    "only with `go test` on a package whose *_test.go you just created. "
+    "Do not leave build output binaries in the repo."
 )
 
 TS_SUITE_NUDGE = (
@@ -740,6 +741,23 @@ def looks_like_go_suite_command(command: str) -> bool:
     return bool(re.search(r"\bgo\s+test\b", lower))
 
 
+def is_full_go_suite_command(command: str) -> bool:
+    """Return True when *command* runs the repo-wide Go test suite.
+
+    Single-package ``go test ./pkg/`` runs (including agent-authored
+    ``*_test.go`` in that package) do not count — hidden fail-to-pass tests
+    may only exist at grading time.
+    """
+    if not command or not looks_like_go_suite_command(command):
+        return False
+    lower = str(command).lower().strip()
+    if "./..." not in lower:
+        return False
+    if re.search(r"[\w./-]+_test\.go\b", lower):
+        return False
+    return True
+
+
 def looks_like_typescript_suite_command(command: str) -> bool:
     """Return True when *command* runs a JS/TS test suite.
 
@@ -864,6 +882,8 @@ def verify_command_targets_agent_authored_tests(
         return False
     if is_full_python_suite_command(command):
         return False
+    if is_full_go_suite_command(command):
+        return False
     lower = str(command).lower()
     for name in agent_created_test_names:
         token = str(name or "").strip().lower()
@@ -872,6 +892,8 @@ def verify_command_targets_agent_authored_tests(
         base = Path(token).name if "/" in token or "\\" in token else token
         stem = Path(base).stem if "." in base else base
         if base in lower or stem in lower:
+            return True
+        if "/" in token and token.replace("\\", "/") in lower.replace("\\", "/"):
             return True
     return False
 
@@ -912,6 +934,10 @@ def verify_command_qualifies_for_completion(
     # Pure-Go edits: require go test, not go build / go vet alone.
     if go_mutated and not native_mutated:
         if not looks_like_go_suite_command(command):
+            return False
+        if verify_command_targets_agent_authored_tests(
+            command, agent_created_test_names
+        ):
             return False
         if user_text and not go_command_matches_task_scope(user_text, command):
             return False
@@ -1344,6 +1370,8 @@ def go_command_matches_task_scope(user_text: str, command: str) -> bool:
     """
     if not user_text or not command or not looks_like_go_suite_command(command):
         return True
+    if is_full_go_suite_command(command):
+        return True
     stem_keywords = _shared_api_stems(user_text)
     repeated_keywords = _repeated_task_keywords(user_text)
     keywords = stem_keywords | repeated_keywords
@@ -1745,6 +1773,7 @@ __all__ = [
     "extract_bash_command_from_result",
     "extract_required_prompt_symbols",
     "is_go_source_path",
+    "is_full_go_suite_command",
     "is_full_python_suite_command",
     "is_full_typescript_suite_command",
     "python_cli_integration_verify_matches",
