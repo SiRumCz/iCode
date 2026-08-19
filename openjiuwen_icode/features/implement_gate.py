@@ -1114,6 +1114,44 @@ def _feature_scope_keywords(text: str) -> frozenset[str]:
     )
 
 
+def _title_compound_keywords(text: str) -> frozenset[str]:
+    """Hyphenated feature phrases from the task title (e.g. async-initialization)."""
+    if not text or not str(text).strip():
+        return frozenset()
+    first = str(text).strip().split("\n", 1)[0].lower()
+    found: set[str] = set()
+    for m in re.finditer(
+        r"\b(?:async|asynchronous)\s+([a-z][a-z0-9_-]{3,})\b", first
+    ):
+        tail = m.group(1)
+        found.add(f"async-{tail}")
+        found.add(tail)
+        found.add("async")
+    for raw in re.findall(r"`([^`]+)`", text.lower()):
+        tok = _normalize_symbol_token(raw)
+        if "-" in tok and len(tok) >= 8:
+            found.add(tok)
+    for m in re.finditer(
+        r"\b([a-z][a-z0-9]*(?:-[a-z][a-z0-9_-]+)+)\b", first
+    ):
+        found.add(m.group(1))
+    return frozenset(found)
+
+
+def _compound_in_command(compound: str, command_lower: str) -> bool:
+    """Match title feature phrases without substring roots like initia→initialize."""
+    if not compound or not command_lower:
+        return False
+    if compound in command_lower:
+        return True
+    if "-" not in compound:
+        return False
+    parts = [part for part in compound.split("-") if len(part) >= 4]
+    if len(parts) < 2:
+        return False
+    return all(part in command_lower for part in parts)
+
+
 def _keyword_in_command(keyword: str, command_lower: str) -> bool:
     """Match task keywords against pytest paths (snapshot ↔ snapshots)."""
     if keyword in command_lower:
@@ -1138,22 +1176,32 @@ def typescript_command_matches_task_scope(user_text: str, command: str) -> bool:
         return True
     stem_keywords = _shared_api_stems(user_text)
     repeated_keywords = _repeated_task_keywords(user_text)
+    compound_keywords = _title_compound_keywords(user_text)
     keywords = stem_keywords | repeated_keywords
-    if not keywords:
+    if not keywords and not compound_keywords:
         return True
     lower = str(command).lower()
     match = re.search(r"\b(?:-t|--testNamePattern=)(['\"]?)([\w.-]+)\1", lower)
     if match:
         expr = match.group(2)
+        if compound_keywords:
+            if any(_compound_in_command(c, expr) for c in compound_keywords):
+                return True
+            return False
         return any(_keyword_in_command(kw, expr) for kw in keywords)
-    if re.search(r"__tests__/[\w./-]+\.test\.(?:ts|tsx|js)", lower):
-        scoped = stem_keywords or repeated_keywords
-        return any(_keyword_in_command(kw, lower) for kw in scoped)
-    if re.search(r"\.test\.(?:ts|tsx|js)\b", lower):
+    if re.search(r"__tests__/[\w./-]+\.test\.(?:ts|tsx|js)", lower) or re.search(
+        r"\.test\.(?:ts|tsx|js)\b", lower
+    ):
+        if compound_keywords:
+            if any(_compound_in_command(c, lower) for c in compound_keywords):
+                return True
+            return False
         scoped = stem_keywords or repeated_keywords
         return any(_keyword_in_command(kw, lower) for kw in scoped)
     if re.search(r"\b(?:describe|it)\(['\"][^'\"]+['\"]", lower):
         return any(_keyword_in_command(kw, lower) for kw in keywords)
+    if compound_keywords:
+        return any(_compound_in_command(c, lower) for c in compound_keywords)
     # Bare repo-wide npm test against an unchanged base is not enough.
     return any(_keyword_in_command(kw, lower) for kw in keywords)
 

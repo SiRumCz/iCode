@@ -286,13 +286,13 @@ class MutationTracker:
         return bool((proc.stdout or "").strip())
 
     def has_deliverable_workspace_changes(self) -> bool:
-        """Return True when in-workspace edits would show up in ``git status``."""
-        if not self.has_workspace_changes():
-            return False
-        dirty = self.git_worktree_dirty()
-        if dirty is None:
-            return True
-        return dirty
+        """Return True when the open turn changed in-workspace files.
+
+        Agents often ``git commit`` during implement tasks. A clean worktree
+        still yields a model.patch via ``git diff <base>..HEAD`` at grading
+        time, so committed edits must count as deliverable.
+        """
+        return self.has_workspace_changes()
 
     def list_turns(self) -> list[TurnMutations]:
         return list(self._turns)

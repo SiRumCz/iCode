@@ -400,6 +400,27 @@ def test_typescript_suite_required_for_pure_ts_edits() -> None:
     )
 
 
+def test_typescript_scope_rejects_agent_only_initialize_tests() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        typescript_command_matches_task_scope,
+    )
+
+    task = (
+        "Add support for asynchronous initialization of container registrations "
+        "with automatic dependency-aware startup ordering.\n\n"
+        "Call container.initialize({ concurrency: 5 })."
+    )
+    assert not typescript_command_matches_task_scope(
+        task, "npx jest src/__tests__/container.initialize.test.ts"
+    )
+    assert typescript_command_matches_task_scope(
+        task, "npx jest src/__tests__/async-initialization.test.ts"
+    )
+    assert typescript_command_matches_task_scope(
+        task, "npm test -- async-initialization"
+    )
+
+
 def test_native_build_nudge_before_submit() -> None:
     text = "Implement PEP 696 then run lolbench-submit"
     assert (
