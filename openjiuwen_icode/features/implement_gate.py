@@ -839,19 +839,74 @@ def extract_bash_command_from_result(result: Any) -> str:
     return ""
 
 
+def _bash_stdout_from_result(result: Any) -> str:
+    """Extract stdout blob from a formatted bash tool result string."""
+    text = result if isinstance(result, str) else str(result or "")
+    match = re.search(r"Stdout:\s*(.*?)(?:\nStderr:|\nExit Code:|\Z)", text, re.DOTALL)
+    if match:
+        return match.group(1)
+    return text
+
+
+def bash_output_indicates_failure(result: Any) -> bool:
+    """Return True when captured bash stdout clearly shows a failed verify run.
+
+    Piped commands such as ``jest … | tail -60`` often report exit code 0 even
+    when the test runner failed; the summary lines in stdout are more reliable.
+    """
+    blob = _bash_stdout_from_result(result)
+    if not blob.strip():
+        return False
+
+    # Jest / Vitest style summaries.
+    if re.search(r"Test Suites:\s*[1-9]\d*\s+failed\b", blob, re.IGNORECASE):
+        return True
+    if re.search(r"Tests:\s*[1-9]\d*\s+failed\b", blob, re.IGNORECASE):
+        return True
+    if re.search(r"^FAIL\s+\S", blob, re.MULTILINE):
+        return True
+    if "Test suite failed to run" in blob:
+        return True
+
+    # pytest summary (``= 2 failed, 1 passed in 0.12s =``).
+    if re.search(r"=\s*[1-9]\d*\s+failed\b", blob):
+        return True
+    if re.search(r"^FAILED\s+\S", blob, re.MULTILINE):
+        return True
+
+    # cargo test / Rust build failures.
+    if re.search(r"test result: FAILED", blob, re.IGNORECASE):
+        return True
+    if re.search(r"^error(?:\[\w+\])?:", blob, re.MULTILINE):
+        return True
+
+    # go test failures.
+    if re.search(r"^--- FAIL:", blob, re.MULTILINE):
+        return True
+    if re.search(r"^FAIL\s+\S", blob, re.MULTILINE):
+        return True
+
+    return False
+
+
 def bash_result_succeeded(
     result: Any,
     *,
     tool_success: bool | None = None,
 ) -> bool | None:
     """Return True/False for bash exit status, or None if unknown."""
-    if tool_success is not None:
-        return bool(tool_success)
     text = result if isinstance(result, str) else str(result or "")
-    match = re.search(r"Exit Code:\s*(\d+)", text, re.IGNORECASE)
-    if match:
-        return int(match.group(1)) == 0
-    return None
+    exit_ok: bool | None = None
+    if tool_success is not None:
+        exit_ok = bool(tool_success)
+    else:
+        match = re.search(r"Exit Code:\s*(\d+)", text, re.IGNORECASE)
+        if match:
+            exit_ok = int(match.group(1)) == 0
+
+    if bash_output_indicates_failure(result):
+        return False
+    return exit_ok
 
 
 def edit_args_look_shallow(tool_args: Any) -> bool:
@@ -1452,6 +1507,7 @@ __all__ = [
     "wrap_implement_continuation_query",
     "zero_mutation_continuation_nudge",
     "ZERO_MUTATION_NUDGE",
+    "bash_output_indicates_failure",
     "bash_result_succeeded",
     "edit_args_look_shallow",
     "extract_bash_command",

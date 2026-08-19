@@ -446,6 +446,45 @@ def test_bash_result_success_detection() -> None:
     assert extract_bash_command_from_result(ok) == "make -j2 python"
 
 
+def test_bash_result_detects_jest_failure_with_piped_zero_exit() -> None:
+    """Piped ``tail`` can mask jest's non-zero exit; stdout summary must fail."""
+    piped_fail = (
+        "Command: cd /app && npx jest foo.test.ts 2>&1 | tail -60\n"
+        "Stdout: FAIL src/__tests__/foo.test.ts\n"
+        "  ● Test suite failed to run\n\n"
+        "Test Suites: 1 failed, 1 total\n"
+        "Tests:       0 total\n"
+        "Stderr: (empty)\n"
+        "Exit Code: 0"
+    )
+    assert bash_result_succeeded(piped_fail) is False
+    assert bash_result_succeeded(piped_fail, tool_success=True) is False
+
+    piped_pass = (
+        "Command: cd /app && npx jest container.initialize 2>&1 | tail -22\n"
+        "Stdout: PASS src/__tests__/container.initialize.test.ts\n"
+        "Test Suites: 1 passed, 1 total\n"
+        "Tests:       12 passed, 12 total\n"
+        "Stderr: (empty)\n"
+        "Exit Code: 0"
+    )
+    assert bash_result_succeeded(piped_pass) is True
+
+
+def test_bash_result_detects_pytest_and_go_failures_in_stdout() -> None:
+    pytest_fail = (
+        "Command: pytest -q\nStdout: ===== 2 failed, 1 passed in 0.4s =====\n"
+        "Exit Code: 0"
+    )
+    assert bash_result_succeeded(pytest_fail) is False
+
+    go_fail = (
+        "Command: go test ./pkg\nStdout: --- FAIL: TestFoo (0.00s)\n"
+        "FAIL\texample.com/pkg\t0.01s\nExit Code: 0"
+    )
+    assert bash_result_succeeded(go_fail) is False
+
+
 def test_shallow_signature_edit_option_to_vec() -> None:
     old = "    pub config: Option<PathBuf>,\n"
     new = "    pub config: Vec<String>,\n"
