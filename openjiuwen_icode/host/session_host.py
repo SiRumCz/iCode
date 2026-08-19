@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
@@ -48,6 +49,8 @@ from openjiuwen_icode.host.workdirs import WorkdirRegistry
 from openjiuwen_icode.storage.event_log import SessionEventLog
 from openjiuwen_icode.storage.session_store import SessionStore
 from openjiuwen_icode.features.mutations import MutationTracker
+
+logger = logging.getLogger(__name__)
 
 
 class AgentBackendLike(Protocol):
@@ -319,6 +322,7 @@ class SessionHost:
                 mutation_text_from_args,
                 next_implement_continuation,
                 tool_is_edit_existing,
+                tool_runtime_continuation_nudge,
                 verify_command_qualifies_for_completion,
                 wrap_implement_continuation_query,
             )
@@ -536,6 +540,38 @@ class SessionHost:
                                 _task_text(), nudge
                             )
                             continue
+                    raise
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # Tool/backend crashes (e.g. ENAMETOOLONG from a malformed
+                    # write_file path) must not TurnFailed implement tasks
+                    # before empty-worktree continuations can recover.
+                    if (
+                        self._auto_approve
+                        and continuation_attempts < max_continuations
+                        and looks_like_implement_task(_task_text())
+                    ):
+                        logger.warning(
+                            "implement turn caught tool/runtime error; "
+                            "continuing (%s/%s): %s",
+                            continuation_attempts + 1,
+                            max_continuations,
+                            exc,
+                        )
+                        try:
+                            await self._backend.abort()
+                        except Exception:  # noqa: BLE001
+                            logger.debug(
+                                "abort after tool/runtime error failed",
+                                exc_info=True,
+                            )
+                        continuation_attempts += 1
+                        query = wrap_implement_continuation_query(
+                            _task_text(),
+                            tool_runtime_continuation_nudge(exc),
+                        )
+                        continue
                     raise
 
                 if pending:

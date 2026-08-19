@@ -8,6 +8,7 @@ from openjiuwen_icode.features.implement_gate import (
     NATIVE_BUILD_NUDGE,
     SHALLOW_EDIT_NUDGE,
     SUBMIT_NUDGE,
+    TOOL_RUNTIME_NUDGE,
     VERIFY_FAILED_NUDGE,
     VERIFY_NUDGE,
     ZERO_MUTATION_NUDGE,
@@ -30,6 +31,7 @@ from openjiuwen_icode.features.implement_gate import (
     primary_user_task_text,
     pytest_command_matches_task_scope,
     task_requires_submit,
+    tool_runtime_continuation_nudge,
     verify_command_qualifies_for_completion,
     wrap_implement_continuation_query,
 )
@@ -103,6 +105,17 @@ def test_wrap_implement_continuation_query_includes_original_task() -> None:
     assert wrap_implement_continuation_query(original, original) == original
     assert is_wrapped_implement_continuation_query(wrapped)
     assert not is_wrapped_implement_continuation_query(original)
+
+
+def test_tool_runtime_nudge_is_headless_continuation() -> None:
+    assert is_headless_continuation_nudge(TOOL_RUNTIME_NUDGE)
+    wrapped = wrap_implement_continuation_query(
+        "Implement AutoToc in src/rules/auto-toc.ts",
+        tool_runtime_continuation_nudge(OSError(36, "File name too long")),
+    )
+    assert is_wrapped_implement_continuation_query(wrapped)
+    assert "plain path" in wrapped
+    assert "File name too long" in wrapped
 
 
 def test_verify_and_submit_command_detection() -> None:

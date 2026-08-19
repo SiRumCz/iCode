@@ -56,3 +56,59 @@ async def test_patched_cancel_awaits_other_task() -> None:
     agent._stream_process_task = bg
     await DeepAgent._cancel_stream_process_task(agent)
     assert bg.done()
+
+
+@pytest.mark.asyncio
+async def test_task_cancel_cycle_does_not_recursionerror() -> None:
+    # CPython may refuse to replace Task.cancel; the shutdown wrapper still
+    # has to swallow RecursionError so icode run does not die with 139.
+    applied = cancel_patch.patch_task_cancel_cycle()
+    if applied:
+        ta: asyncio.Task | None = None
+        tb: asyncio.Task | None = None
+
+        async def _a() -> None:
+            assert tb is not None
+            await tb
+
+        async def _b() -> None:
+            assert ta is not None
+            await ta
+
+        ta = asyncio.create_task(_a(), name="tool:bash:cycle-a")
+        tb = asyncio.create_task(_b(), name="tool:bash:cycle-b")
+        await asyncio.sleep(0)
+        ta.cancel()
+        results = await asyncio.gather(ta, tb, return_exceptions=True)
+        assert not any(isinstance(item, RecursionError) for item in results)
+        return
+    assert cancel_patch.patch_cancel_all_tasks()
+
+
+def test_cancel_all_tasks_patch_swallows_recursionerror(monkeypatch) -> None:
+    import asyncio.runners as runners
+
+    called = {"n": 0}
+
+    def boom(loop) -> None:
+        called["n"] += 1
+        raise RecursionError("maximum recursion depth exceeded")
+
+    cancel_patch._PATCHED_CANCEL_ALL = False
+    monkeypatch.setattr(runners, "_cancel_all_tasks", boom)
+    assert cancel_patch.patch_cancel_all_tasks()
+    runners._cancel_all_tasks(object())
+    assert called["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_in_flight_agent_tasks_cancels_tool_named() -> None:
+    blocker = asyncio.Event()
+
+    async def _tool() -> None:
+        await blocker.wait()
+
+    task = asyncio.create_task(_tool(), name="tool:bash:call_00")
+    await asyncio.sleep(0)
+    await cancel_patch.cancel_in_flight_agent_tasks(timeout=1.0)
+    assert task.done()

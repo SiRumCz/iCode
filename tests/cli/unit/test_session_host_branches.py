@@ -374,3 +374,90 @@ async def test_bind_mutations_from_workdir(tmp_path: Path) -> None:
     host._bind_mutations(None)
     assert host.mutations is None
     host._on_event_log_tap(UserMessage(text="x"))  # no log
+
+
+@pytest.mark.asyncio
+async def test_implement_tool_crash_continues_instead_of_turn_failed() -> None:
+    """ENAMETOOLONG-style backend crashes must not skip implement continuations."""
+    from openjiuwen_icode.features.implement_gate import (
+        INCOMPLETE_IMPLEMENT_ERROR,
+        TOOL_RUNTIME_NUDGE,
+    )
+
+    bus = EventBus()
+    queries: list[object] = []
+
+    class BoomThenOk(DemoBackend):
+        async def run_streaming(
+            self, query: object, session_id: str | None = None
+        ):
+            queries.append(query)
+            if len(queries) == 1:
+                raise OSError(36, "File name too long")
+            async for chunk in DemoBackend.run_streaming(
+                self, query, session_id
+            ):
+                yield chunk
+
+    backend = BoomThenOk()
+    host = SessionHost(
+        bus, backend, session_id="s1", auto_approve=True
+    )
+    failed: list[TurnFailed] = []
+    done = asyncio.Event()
+
+    async def on_fail(ev: TurnFailed) -> None:
+        failed.append(ev)
+        done.set()
+
+    async def on_fin(_: TurnFinished) -> None:
+        done.set()
+
+    await bus.subscribe(TurnFailed, on_fail)
+    await bus.subscribe(TurnFinished, on_fin)
+    await host.start()
+    await bus.publish(
+        UserMessage(
+            text="Implement a new AutoToc rule in src/rules/auto-toc.ts",
+            session_id="s1",
+        )
+    )
+    await asyncio.wait_for(done.wait(), timeout=5)
+    await host.stop()
+
+    assert len(queries) >= 2
+    assert any(
+        isinstance(q, str) and TOOL_RUNTIME_NUDGE[:40] in q for q in queries[1:]
+    )
+    assert failed
+    assert INCOMPLETE_IMPLEMENT_ERROR in failed[-1].error
+    assert "File name too long" not in failed[-1].error
+
+
+@pytest.mark.asyncio
+async def test_non_implement_tool_crash_still_turn_failed() -> None:
+    bus = EventBus()
+
+    class Boom(DemoBackend):
+        async def run_streaming(
+            self, query: object, session_id: str | None = None
+        ):
+            raise OSError(36, "File name too long")
+            if False:  # pragma: no cover
+                yield None
+
+    host = SessionHost(bus, Boom(), session_id="s1", auto_approve=True)
+    failed: list[TurnFailed] = []
+    done = asyncio.Event()
+
+    async def on_fail(ev: TurnFailed) -> None:
+        failed.append(ev)
+        done.set()
+
+    await bus.subscribe(TurnFailed, on_fail)
+    await host.start()
+    await bus.publish(UserMessage(text="What is Ruff?", session_id="s1"))
+    await asyncio.wait_for(done.wait(), timeout=3)
+    await host.stop()
+    assert failed
+    assert "File name too long" in failed[0].error

@@ -259,6 +259,14 @@ STALL_CONTINUATION_NUDGE = (
     "immediately — do not only search or read files."
 )
 
+TOOL_RUNTIME_NUDGE = (
+    "A file/tool call crashed inside the harness instead of returning a "
+    "normal tool error. Do not stop. Call `write_file` or `edit_file` again "
+    "with `file_path` as a plain path string (for example `/app/src/foo.ts`) "
+    "and `content` as a separate string field — never put the whole JSON "
+    "object into `file_path`. Then continue the original task."
+)
+
 ZERO_MUTATION_NUDGE = (
     "You analyzed the codebase but did not modify any files. "
     "The user asked you to implement changes. Call `edit_file` or "
@@ -409,6 +417,7 @@ def is_headless_continuation_nudge(text: str) -> bool:
         ZERO_MUTATION_NUDGE,
         WORKTREE_NUDGE,
         STALL_CONTINUATION_NUDGE,
+        TOOL_RUNTIME_NUDGE,
         SHALLOW_EDIT_NUDGE,
         INTEGRATION_NUDGE,
         VERIFY_NUDGE,
@@ -478,6 +487,16 @@ def primary_user_task_text(messages_or_ctx: Any) -> str:
         if not fallback:
             fallback = text
     return fallback
+
+
+def tool_runtime_continuation_nudge(exc: BaseException | str) -> str:
+    """Nudge used when a tool/backend exception would otherwise TurnFailed."""
+    detail = str(exc).strip().replace("\n", " ")
+    if len(detail) > 240:
+        detail = detail[:240] + "..."
+    if not detail:
+        return TOOL_RUNTIME_NUDGE
+    return f"{TOOL_RUNTIME_NUDGE}\n\nHarness error: {detail}"
 
 
 def wrap_implement_continuation_query(original: str, nudge: str) -> str:
@@ -1425,6 +1444,7 @@ __all__ = [
     "PYTHON_SUITE_NUDGE",
     "SHALLOW_EDIT_NUDGE",
     "STALL_CONTINUATION_NUDGE",
+    "TOOL_RUNTIME_NUDGE",
     "SUBMIT_NUDGE",
     "VERIFY_FAILED_NUDGE",
     "VERIFY_NUDGE",
@@ -1470,5 +1490,6 @@ __all__ = [
     "task_requires_submit",
     "tool_is_edit_existing",
     "tool_is_write_file",
+    "tool_runtime_continuation_nudge",
     "verify_command_qualifies_for_completion",
 ]

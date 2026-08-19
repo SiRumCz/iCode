@@ -352,6 +352,24 @@ async def _run_interactive(
         return 0
 
 
+def _asyncio_run(coro: Any, *, fallback: int = 1) -> Any:
+    """``asyncio.run`` that survives Task.cancel RecursionError on loop close.
+
+    Stall abort can leave a waiter cycle; CPython then RecursionErrors inside
+    ``Runner.close`` / ``_cancel_all_tasks`` after the main coroutine already
+    finished. Treat that as *fallback* instead of dying with SIGSEGV 139.
+    """
+    try:
+        return asyncio.run(coro)
+    except RecursionError:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "asyncio shutdown RecursionError (Task.cancel cycle)"
+        )
+        return fallback
+
+
 def _run_interactive_with_setup(
     opts: CLIOptions,
     *,
@@ -360,7 +378,7 @@ def _run_interactive_with_setup(
 ) -> int:
     """Run interactive mode, offering first-time API key setup on TTY."""
     try:
-        return asyncio.run(
+        return _asyncio_run(
             _run_interactive(
                 opts, demo=demo, force_repl=force_repl
             )
@@ -381,7 +399,7 @@ def _run_interactive_with_setup(
                 verbose=opts.verbose,
                 project=opts.project,
             )
-            return asyncio.run(
+            return _asyncio_run(
                 _run_interactive(
                     patched, demo=False, force_repl=force_repl
                 )
@@ -662,7 +680,7 @@ def run(
         raise click.UsageError("Prompt is empty.")
 
     try:
-        exit_code = asyncio.run(
+        exit_code = _asyncio_run(
             _run_once(
                 opts,
                 text,
@@ -740,7 +758,7 @@ def bus_run(
         )
 
     try:
-        exit_code = asyncio.run(
+        exit_code = _asyncio_run(
             _run_via_bus(
                 opts,
                 prompt,
@@ -914,7 +932,7 @@ def acp_cmd(ctx: click.Context, demo: bool, auto_approve: bool) -> None:
         )
 
     try:
-        exit_code = asyncio.run(_main())
+        exit_code = _asyncio_run(_main())
         if exit_code:
             ctx.exit(exit_code)
     except KeyboardInterrupt:
@@ -1465,7 +1483,7 @@ def auto_harness_run(
     opts: CLIOptions = ctx.obj["opts"]
     try:
         request = AutoHarnessRunRequest.from_kwargs(kwargs)
-        exit_code = asyncio.run(
+        exit_code = _asyncio_run(
             _run_auto_harness(opts, request)
         )
         ctx.exit(exit_code)
@@ -1487,7 +1505,7 @@ def experience_search(
 ) -> None:
     """搜索经验库。"""
     opts: CLIOptions = ctx.obj["opts"]
-    asyncio.run(
+    _asyncio_run(
         _run_experience_search(
             opts.project or "", query
         ),
@@ -1511,7 +1529,7 @@ def experience_list(
 ) -> None:
     """列出经验库记录。"""
     opts: CLIOptions = ctx.obj["opts"]
-    asyncio.run(
+    _asyncio_run(
         _run_experience_list(
             opts.project or "", mem_type, limit,
         ),
@@ -1534,7 +1552,7 @@ def auto_harness_verify_ext(
     ext_path: str | None,
 ) -> None:
     """轻量验证扩展包（结构+lint）。"""
-    asyncio.run(_run_verify_ext(ext_path))
+    _asyncio_run(_run_verify_ext(ext_path))
 
 
 def _generate_smoke_scaffold(
@@ -1741,7 +1759,7 @@ def gap_analyze(
 ) -> None:
     """差距分析。"""
     opts: CLIOptions = ctx.obj["opts"]
-    asyncio.run(
+    _asyncio_run(
         _run_gap_analyze(
             opts.project or "",
         ),
@@ -1759,7 +1777,7 @@ def auto_harness_history(
 ) -> None:
     """查看优化历史。"""
     opts: CLIOptions = ctx.obj["opts"]
-    asyncio.run(
+    _asyncio_run(
         _run_experience_list(
             opts.project or "", None, limit
         ),

@@ -8,6 +8,7 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -35,7 +36,8 @@ from openjiuwen_icode.sdk_compat import (
     load_concurrency_types,
 )
 from openjiuwen_icode.sdk_compat_cancel import (
-    patch_deep_agent_cancel_cycle,
+    cancel_in_flight_agent_tasks,
+    patch_cancel_cycle_guards,
 )
 from openjiuwen.harness.rails import (
     AskUserRail,
@@ -46,7 +48,7 @@ from openjiuwen.harness.rails import (
 logger = logging.getLogger(__name__)
 
 # Guard DeepAgent stall/abort cancel against asyncio Task.cancel cycles.
-patch_deep_agent_cancel_cycle()
+patch_cancel_cycle_guards()
 
 # Prefer iCode-vendored ripgrep before agent-core GrepTool resolves PATH.
 try:
@@ -722,12 +724,17 @@ class LocalBackend:
             # orphan ToolCallStarts while the continuation runs.
             _ = attempt, stall
             try:
-                await self.abort()
+                await asyncio.wait_for(self.abort(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "abort before stream stall retry timed out after 5s"
+                )
             except Exception:  # noqa: BLE001
                 logger.debug(
                     "abort before stream stall retry failed",
                     exc_info=True,
                 )
+            await cancel_in_flight_agent_tasks()
 
         async for chunk in iter_with_stall_retry(
             _open,
@@ -741,8 +748,18 @@ class LocalBackend:
         if self.agent is not None:
             try:
                 await self.agent.abort()
+            except RecursionError:
+                logger.warning("DeepAgent.abort RecursionError (cancel cycle)")
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            await cancel_in_flight_agent_tasks()
+        except RecursionError:
+            logger.warning(
+                "RecursionError cancelling leftover agent tasks after abort"
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("cancel leftover agent tasks failed", exc_info=True)
 
     async def steer(self, msg: str) -> None:
         """Forward mid-turn inject to DeepAgent ``steer``."""
