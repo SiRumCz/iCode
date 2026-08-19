@@ -96,13 +96,14 @@ def tighten_edit_rails_for_continuation(agent: Any) -> None:
     """Use a short explore budget on SessionHost continuation streams.
 
     After a ZERO_MUTATION / WORKTREE nudge the agent should edit immediately,
-    not burn another full explore window on grep/go test loops.
+    not burn another full explore window on grep/go test loops. Allow a few
+    reads so the model can locate the write target before hard-abort.
     """
     for rail in _iter_code_edit_rails(agent):
-        # Continuation streams must edit immediately — no extra grep/npm loops.
+        # Continuation streams must edit soon — a couple of reads is ok.
         rail.explore_budget = 0
-        rail.explore_abort_cap = 1
-        rail.model_abort_cap = 2
+        rail.explore_abort_cap = 3
+        rail.model_abort_cap = 4
         rail.reset_stream_state()
 
 
@@ -113,21 +114,25 @@ class CodeEditNudgeRail(DeepAgentRail):
 
     def __init__(
         self,
-        explore_budget: int = 3,
+        explore_budget: int = 8,
         *,
         explore_abort_cap: int | None = None,
         model_abort_cap: int | None = None,
     ) -> None:
         super().__init__()
         self.explore_budget = max(1, int(explore_budget))
+        # Default abort cap is intentionally higher than the nudge budget so
+        # TypeScript/Python repos can be oriented (list/read a dozen files)
+        # before a hard stop. Hard abort is recovered by SessionHost as an
+        # empty-worktree continuation — not TurnFailed.
         cap = explore_abort_cap
         self.explore_abort_cap = max(
             self.explore_budget + 1,
-            int(cap if cap is not None else self.explore_budget + 2),
+            int(cap if cap is not None else 24),
         )
         self.model_abort_cap = max(
             self.explore_budget + 1,
-            int(model_abort_cap if model_abort_cap is not None else 10),
+            int(model_abort_cap if model_abort_cap is not None else 16),
         )
         self._explore_count = 0
         self._workspace_mutated = False

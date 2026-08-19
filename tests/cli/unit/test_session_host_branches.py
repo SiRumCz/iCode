@@ -461,3 +461,108 @@ async def test_non_implement_tool_crash_still_turn_failed() -> None:
     await host.stop()
     assert failed
     assert "File name too long" in failed[0].error
+
+
+@pytest.mark.asyncio
+async def test_explore_abort_cancelled_continues_implement_turn() -> None:
+    """CodeEditNudgeRail abort must soft-continue, not TurnFailed('turn cancelled')."""
+    from openjiuwen_icode.features.implement_gate import (
+        INCOMPLETE_IMPLEMENT_ERROR,
+        ZERO_MUTATION_NUDGE,
+    )
+
+    bus = EventBus()
+    queries: list[object] = []
+
+    class AbortThenOk(DemoBackend):
+        async def run_streaming(
+            self, query: object, session_id: str | None = None
+        ):
+            queries.append(query)
+            if len(queries) == 1:
+                raise asyncio.CancelledError()
+            async for chunk in DemoBackend.run_streaming(
+                self, query, session_id
+            ):
+                yield chunk
+
+    backend = AbortThenOk()
+    host = SessionHost(
+        bus, backend, session_id="s1", auto_approve=True
+    )
+    failed: list[TurnFailed] = []
+    done = asyncio.Event()
+
+    async def on_fail(ev: TurnFailed) -> None:
+        failed.append(ev)
+        done.set()
+
+    async def on_fin(_: TurnFinished) -> None:
+        done.set()
+
+    await bus.subscribe(TurnFailed, on_fail)
+    await bus.subscribe(TurnFinished, on_fin)
+    await host.start()
+    await bus.publish(
+        UserMessage(
+            text="Implement a new AutoToc rule in src/rules/auto-toc.ts",
+            session_id="s1",
+        )
+    )
+    await asyncio.wait_for(done.wait(), timeout=5)
+    await host.stop()
+
+    assert len(queries) >= 2
+    assert any(
+        isinstance(q, str) and ZERO_MUTATION_NUDGE[:40] in q
+        for q in queries[1:]
+    )
+    assert failed
+    assert INCOMPLETE_IMPLEMENT_ERROR in failed[-1].error
+    assert "turn cancelled" not in failed[-1].error
+
+
+@pytest.mark.asyncio
+async def test_user_interrupt_still_turn_cancelled() -> None:
+    """Outer turn-task cancel (UserInterrupt) must keep failing the turn."""
+    bus = EventBus()
+
+    class Hang(DemoBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def run_streaming(
+            self, query: object, session_id: str | None = None
+        ):
+            self.started.set()
+            await asyncio.Event().wait()
+            if False:  # pragma: no cover
+                yield None
+
+    backend = Hang()
+    host = SessionHost(
+        bus, backend, session_id="s1", auto_approve=True
+    )
+    failed: list[TurnFailed] = []
+    done = asyncio.Event()
+
+    async def on_fail(ev: TurnFailed) -> None:
+        failed.append(ev)
+        done.set()
+
+    await bus.subscribe(TurnFailed, on_fail)
+    await host.start()
+    await bus.publish(
+        UserMessage(
+            text="Implement typed bindings in the parser",
+            session_id="s1",
+        )
+    )
+    await asyncio.wait_for(backend.started.wait(), timeout=2)
+    assert host._turn_task is not None
+    host._turn_task.cancel()
+    await asyncio.wait_for(done.wait(), timeout=3)
+    await host.stop()
+    assert failed
+    assert "turn cancelled" in failed[0].error

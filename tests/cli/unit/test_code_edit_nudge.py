@@ -239,14 +239,24 @@ def test_tighten_edit_rails_for_continuation() -> None:
     rail._explore_count = 9
     tighten_edit_rails_for_continuation(agent)
     assert rail.explore_budget == 0
-    assert rail.explore_abort_cap == 1
-    assert rail.model_abort_cap == 2
+    assert rail.explore_abort_cap == 3
+    assert rail.model_abort_cap == 4
     assert rail._explore_count == 0
 
 
-def test_default_explore_abort_cap_is_tight() -> None:
+def test_default_explore_abort_cap_allows_orientation() -> None:
+    rail = CodeEditNudgeRail()
+    assert rail.explore_budget == 8
+    assert rail.explore_abort_cap == 24
+    assert rail.model_abort_cap == 16
+
+
+def test_explicit_explore_budget_still_raises_abort_floor() -> None:
     rail = CodeEditNudgeRail(explore_budget=3)
-    assert rail.explore_abort_cap == 5
+    assert rail.explore_abort_cap == 24
+    assert rail.model_abort_cap == 16
+    rail_tight = CodeEditNudgeRail(explore_budget=3, explore_abort_cap=5)
+    assert rail_tight.explore_abort_cap == 5
 
 
 @pytest.mark.asyncio

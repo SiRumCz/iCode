@@ -542,6 +542,36 @@ class SessionHost:
                             continue
                     raise
                 except asyncio.CancelledError:
+                    # UserInterrupt cancels the turn task itself — still fail.
+                    turn = asyncio.current_task()
+                    if turn is not None and turn.cancelling():
+                        raise
+                    # CodeEditNudgeRail / DeepAgent.abort soft-stops an
+                    # explore-only stream. Convert that into an empty-worktree
+                    # continuation instead of TurnFailed("turn cancelled"),
+                    # which used to leave DeepSWE with an empty model.patch.
+                    if (
+                        self._auto_approve
+                        and continuation_attempts < max_continuations
+                        and looks_like_implement_task(_task_text())
+                        and not _workspace_deliverable()
+                    ):
+                        forced = (
+                            WORKTREE_NUDGE
+                            if mutate_attempted
+                            else ZERO_MUTATION_NUDGE
+                        )
+                        logger.warning(
+                            "implement stream aborted (explore soft-stop); "
+                            "continuing (%s/%s)",
+                            continuation_attempts + 1,
+                            max_continuations,
+                        )
+                        continuation_attempts += 1
+                        query = wrap_implement_continuation_query(
+                            _task_text(), forced
+                        )
+                        continue
                     raise
                 except Exception as exc:
                     # Tool/backend crashes (e.g. ENAMETOOLONG from a malformed
