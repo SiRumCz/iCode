@@ -393,6 +393,21 @@ TS_SUITE_NUDGE = (
     "until they pass before finishing."
 )
 
+TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE = (
+    "You ran TypeScript tests and they passed, but the harness still needs "
+    "broader verification before this implement turn can finish. Do not "
+    "re-run the same command, make empty touch commits, or tweak comments "
+    "to \"force a diff\". Instead: (1) run the repo's canonical suite "
+    "without piping through `head`/`tail`/`grep` (for example bare "
+    "`npm test`, `pnpm test`, or `npx vitest run`), or target the feature "
+    "area named in the task; (2) ensure chainable methods the user named "
+    "are wired on real runtime entrypoints (for example "
+    "`db.select().from(table).{methods}(...)`, including `$dynamic()` "
+    "variants when the repo uses them), not only in isolated helper unit "
+    "tests; (3) add or extend a test that exercises those builder chains, "
+    "fix any failures, and re-run verification."
+)
+
 
 def _message_text(msg: Any) -> str:
     """Extract plain text from a chat message object or dict."""
@@ -433,6 +448,7 @@ def is_headless_continuation_nudge(text: str) -> bool:
         PYTHON_SUITE_NUDGE,
         GO_SUITE_NUDGE,
         TS_SUITE_NUDGE,
+        TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE,
     ):
         if stripped == marker or stripped.startswith(marker[:48]):
             return True
@@ -1520,14 +1536,46 @@ def extract_required_prompt_symbols(text: str) -> tuple[str, ...]:
     return tuple(found[:24])
 
 
+def extract_chainable_method_names(text: str) -> tuple[str, ...]:
+    """Chainable `.method()` names explicitly required in an implement prompt."""
+    found: list[str] = []
+
+    def _add(raw: str) -> None:
+        tok = _normalize_symbol_token(raw)
+        if _is_strong_symbol(tok, allow_short=True) and tok not in found:
+            found.append(tok)
+
+    for m in re.finditer(r"\.([a-zA-Z_][\w]{1,})\(\)", text):
+        _add(m.group(1))
+    for m in re.finditer(r"chainable\s+\.([a-zA-Z_][\w]{1,})\(", text, re.IGNORECASE):
+        _add(m.group(1))
+    return tuple(found)
+
+
 def _extract_wiring_symbols(text: str) -> tuple[str, ...]:
-    """Entrypoints explicitly wired via slash syntax (Monitor/start_monitor)."""
+    """Entrypoints explicitly wired via slash or chainable-call syntax."""
     found: list[str] = []
     for m in re.finditer(r"/([a-z][a-z0-9_]+)\b", text.lower()):
         tok = _normalize_symbol_token(m.group(1))
         if _is_strong_symbol(tok) and tok not in found:
             found.append(tok)
+    for method in extract_chainable_method_names(text):
+        if method not in found:
+            found.append(method)
     return tuple(found)
+
+
+def typescript_insufficient_verify_nudge(user_text: str) -> str:
+    """Nudge when TS tests passed but did not satisfy the verify gate."""
+    methods = extract_chainable_method_names(user_text)[:6]
+    if not methods:
+        return TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE
+    listed = ", ".join(f"`.{name}()`" for name in methods)
+    return (
+        f"{TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE}\n\n"
+        f"The task names these chainable methods — exercise them on real "
+        f"builder objects in code and tests (for example {listed})."
+    )
 
 
 def _extract_spec_field_names(text: str) -> tuple[str, ...]:
@@ -1626,6 +1674,7 @@ def next_implement_continuation(
     go_suite_verified: bool = False,
     typescript_mutated: bool = False,
     typescript_suite_verified: bool = False,
+    typescript_suite_passed_unqualified: bool = False,
 ) -> str | None:
     """Pick the next headless continuation nudge, or None if done."""
     if not looks_like_implement_task(user_text):
@@ -1644,6 +1693,13 @@ def next_implement_continuation(
         return NATIVE_BUILD_NUDGE
     if go_mutated and not native_mutated and not go_suite_verified:
         return GO_SUITE_NUDGE
+    if (
+        typescript_mutated
+        and not native_mutated
+        and not typescript_suite_verified
+        and typescript_suite_passed_unqualified
+    ):
+        return typescript_insufficient_verify_nudge(user_text)
     if (
         typescript_mutated
         and not native_mutated
@@ -1752,6 +1808,9 @@ __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
     "GO_SUITE_NUDGE",
     "TS_SUITE_NUDGE",
+    "TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE",
+    "extract_chainable_method_names",
+    "typescript_insufficient_verify_nudge",
     "INTEGRATION_NUDGE",
     "NATIVE_BUILD_NUDGE",
     "PROMPT_SYMBOL_NUDGE_TEMPLATE",

@@ -330,6 +330,82 @@ def test_go_suite_required_for_pure_go_edits() -> None:
     )
 
 
+def test_typescript_insufficient_verify_nudge_after_passing_unqualified_run() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE,
+        TS_SUITE_NUDGE,
+        extract_chainable_method_names,
+        next_implement_continuation,
+        typescript_insufficient_verify_nudge,
+        verify_command_qualifies_for_completion,
+    )
+
+    task = (
+        "Add window function helpers with .over() on builders. "
+        "The chainable .window(name, spec) method must be available on "
+        "select builders across all supported dialects."
+    )
+    agent_tests = frozenset({"window-functions.test.ts", "window-functions"})
+    cmd = "cd /app/drizzle-orm && npx vitest run 2>&1 | tail -30"
+
+    assert extract_chainable_method_names(task) == ("over", "window")
+    assert not verify_command_qualifies_for_completion(
+        cmd,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    nudge = typescript_insufficient_verify_nudge(task)
+    assert TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE in nudge
+    assert "`.over()`" in nudge
+    assert "`.window()`" in nudge
+    assert "touch commits" in nudge
+    assert (
+        next_implement_continuation(
+            user_text=task,
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=False,
+            typescript_mutated=True,
+            typescript_suite_verified=False,
+            typescript_suite_passed_unqualified=True,
+        )
+        == nudge
+    )
+    assert (
+        next_implement_continuation(
+            user_text=task,
+            mutate_attempted=True,
+            verify_attempted=False,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=False,
+            typescript_mutated=True,
+            typescript_suite_verified=False,
+            typescript_suite_passed_unqualified=False,
+        )
+        == TS_SUITE_NUDGE
+    )
+
+
+def test_chainable_methods_count_as_wiring_symbols() -> None:
+    from openjiuwen_icode.features.implement_gate import missing_prompt_symbols
+
+    task = (
+        "Implement ranking helpers rowNumber and denseRank. "
+        "Each helper returns a builder with a .over() method. "
+        "The .window() method on query builders must reject empty names."
+    )
+    assert missing_prompt_symbols(
+        user_text=task,
+        mutation_blob="export function rowNumber() {}",
+    ) == ("over", "window")
+
+
 def test_typescript_suite_required_for_pure_ts_edits() -> None:
     from openjiuwen_icode.features.implement_gate import (
         TS_SUITE_NUDGE,

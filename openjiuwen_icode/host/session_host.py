@@ -289,6 +289,7 @@ class SessionHost:
         go_suite_verified = False
         typescript_mutated = False
         typescript_suite_verified = False
+        typescript_suite_passed_unqualified = False
         mutation_blob_parts: list[str] = []
         pending_mutation_args: dict[str, Any] = {}
         continuation_attempts = 0
@@ -375,6 +376,9 @@ class SessionHost:
                     go_suite_verified=go_suite_verified,
                     typescript_mutated=typescript_mutated,
                     typescript_suite_verified=typescript_suite_verified,
+                    typescript_suite_passed_unqualified=(
+                        typescript_suite_passed_unqualified
+                    ),
                 )
 
             await self._bus.publish(
@@ -461,6 +465,7 @@ class SessionHost:
                                             if mutation_args_touch_typescript(args):
                                                 typescript_mutated = True
                                                 typescript_suite_verified = False
+                                                typescript_suite_passed_unqualified = False
                                             if tool_is_edit_existing(ev.tool_name):
                                                 integration_attempted = True
                                             chunk_text = mutation_text_from_args(
@@ -522,6 +527,10 @@ class SessionHost:
                                                 verify_succeeded = True
                                             else:
                                                 verify_succeeded = False
+                                                if looks_like_typescript_suite_command(
+                                                    cmd
+                                                ):
+                                                    typescript_suite_passed_unqualified = True
                                         elif ok is False:
                                             verify_succeeded = False
                                     if looks_like_submit_command(cmd):
