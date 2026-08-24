@@ -5,7 +5,7 @@ Eval / settings store a single semantic value (``none`` / ``low`` / ``medium``
 
 * DeepSeek official API — top-level ``reasoning_effort`` +
   ``extra_body.thinking.type``
-* OpenLux — top-level ``reasoning_effort`` + ``enable_thinking``
+* OpenLux — top-level ``reasoning_effort`` + ``extra_body.enable_thinking``
 * Other OpenAI-compatible bases — DeepSeek-shaped body (widely accepted)
 """
 
@@ -76,7 +76,7 @@ def map_reasoning_for_request(
     """Translate semantic effort into ``init_model`` / ``ModelRequestConfig`` kwargs.
 
     Returns an empty dict when *effort* is unset (leave gateway defaults).
-    Keys may include ``reasoning_effort``, ``enable_thinking``, ``extra_body``.
+    Keys may include ``reasoning_effort`` and ``extra_body``.
     """
     normalized = normalize_reasoning_effort(effort)
     if normalized is None:
@@ -87,6 +87,8 @@ def map_reasoning_for_request(
 
     if gateway == "openlux":
         # OpenLux docs: low/medium/high + enable_thinking.
+        # OpenAI SDK rejects unknown top-level kwargs (TypeError on
+        # enable_thinking); pass the toggle via extra_body instead.
         openlux_effort = {
             "none": None,
             "low": "low",
@@ -96,7 +98,7 @@ def map_reasoning_for_request(
         }[normalized]
         out: dict[str, Any] = {}
         if thinking_on:
-            out["enable_thinking"] = True
+            out["extra_body"] = {"enable_thinking": True}
             if openlux_effort is not None:
                 out["reasoning_effort"] = openlux_effort
         # Explicit off: omit enable_thinking (only true is documented to take effect).
@@ -134,12 +136,14 @@ def merge_request_kwargs(
 
     if "reasoning_effort" in mapped:
         kwargs["reasoning_effort"] = mapped["reasoning_effort"]
-    if "enable_thinking" in mapped:
-        kwargs["enable_thinking"] = mapped["enable_thinking"]
 
     merged_body: dict[str, Any] = {}
     if isinstance(mapped.get("extra_body"), dict):
         merged_body.update(mapped["extra_body"])
+    # Legacy / mistaken top-level enable_thinking → fold into extra_body so
+    # the OpenAI SDK does not TypeError on Completions.create().
+    if "enable_thinking" in mapped:
+        merged_body.setdefault("enable_thinking", mapped["enable_thinking"])
     if extra_body:
         merged_body.update(extra_body)
     if merged_body:

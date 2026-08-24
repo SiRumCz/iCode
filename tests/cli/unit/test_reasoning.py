@@ -31,13 +31,19 @@ def test_detect_gateway() -> None:
 def test_map_openlux_high() -> None:
     assert map_reasoning_for_request(
         "https://api.openlux.ai/v1", "high"
-    ) == {"enable_thinking": True, "reasoning_effort": "high"}
+    ) == {
+        "extra_body": {"enable_thinking": True},
+        "reasoning_effort": "high",
+    }
 
 
 def test_map_openlux_max_becomes_high() -> None:
     assert map_reasoning_for_request(
         "https://api.openlux.ai/v1", "max"
-    ) == {"enable_thinking": True, "reasoning_effort": "high"}
+    ) == {
+        "extra_body": {"enable_thinking": True},
+        "reasoning_effort": "high",
+    }
 
 
 def test_map_openlux_none() -> None:
@@ -72,6 +78,16 @@ def test_merge_caller_extra_body_wins() -> None:
         "thinking": {"type": "disabled"},
         "foo": 1,
     }
+
+
+def test_merge_openlux_does_not_emit_top_level_enable_thinking() -> None:
+    kwargs = merge_request_kwargs(
+        api_base="https://api.openlux.ai/v1",
+        reasoning_effort="max",
+    )
+    assert "enable_thinking" not in kwargs
+    assert kwargs["reasoning_effort"] == "high"
+    assert kwargs["extra_body"] == {"enable_thinking": True}
 
 
 def test_preferred_provider_deepseek() -> None:
