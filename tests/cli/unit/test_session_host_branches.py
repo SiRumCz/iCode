@@ -586,6 +586,96 @@ async def test_chat_only_greeting_caps_continuations_early() -> None:
 
 
 @pytest.mark.asyncio
+async def test_zero_tool_streams_cap_even_after_prior_tools() -> None:
+    """Sticky any_tool_attempted must not disable the zero-tool continuation cap.
+
+    Real DeepSWE failure mode: one explore stream (list_files/bash), then many
+    greeting-only continuations burned the full 10 budget because the cap
+    required ``not any_tool_attempted``.
+    """
+    from openjiuwen.core.session.stream.base import OutputSchema
+
+    from openjiuwen_icode.features.implement_gate import (
+        INCOMPLETE_IMPLEMENT_ERROR,
+        MAX_CHAT_ONLY_CONTINUATIONS,
+        RESUME_AFTER_CHAT_NUDGE,
+    )
+
+    bus = EventBus()
+    queries: list[object] = []
+
+    class ExploreThenGreet(DemoBackend):
+        async def run_streaming(
+            self, query: object, session_id: str | None = None
+        ):
+            queries.append(query)
+            if len(queries) == 1:
+                yield OutputSchema(
+                    type="llm_output",
+                    index=0,
+                    payload={"content": "I'll explore the repo.\n"},
+                )
+                yield OutputSchema(
+                    type="tool_call",
+                    index=1,
+                    payload={
+                        "tool_name": "list_files",
+                        "tool_args": {"path": "/app"},
+                    },
+                )
+                yield OutputSchema(
+                    type="tool_result",
+                    index=2,
+                    payload={
+                        "tool_name": "list_files",
+                        "tool_result": "src\n",
+                    },
+                )
+                return
+            yield OutputSchema(
+                type="llm_output",
+                index=0,
+                payload={
+                    "content": (
+                        "What would you like me to work on?"
+                    )
+                },
+            )
+
+    backend = ExploreThenGreet()
+    host = SessionHost(
+        bus, backend, session_id="s1", auto_approve=True
+    )
+    failed: list[TurnFailed] = []
+    done = asyncio.Event()
+
+    async def on_fail(ev: TurnFailed) -> None:
+        failed.append(ev)
+        done.set()
+
+    await bus.subscribe(TurnFailed, on_fail)
+    await host.start()
+    await bus.publish(
+        UserMessage(
+            text="Implement shared toolbar focus in quill modules",
+            session_id="s1",
+        )
+    )
+    await asyncio.wait_for(done.wait(), timeout=5)
+    await host.stop()
+
+    # 1 explore + 1 zero-mutation continue + up to MAX zero-tool greets.
+    assert 2 <= len(queries) <= MAX_CHAT_ONLY_CONTINUATIONS + 2
+    assert any(
+        isinstance(q, str) and RESUME_AFTER_CHAT_NUDGE[:40] in q
+        for q in queries[1:]
+    )
+    assert failed
+    assert INCOMPLETE_IMPLEMENT_ERROR in failed[-1].error
+    assert len(queries) < 10
+
+
+@pytest.mark.asyncio
 async def test_user_interrupt_still_turn_cancelled() -> None:
     """Outer turn-task cancel (UserInterrupt) must keep failing the turn."""
     bus = EventBus()

@@ -333,12 +333,15 @@ class CodeEditNudgeRail(DeepAgentRail):
         return False
 
     async def after_model_call(self, ctx: AgentCallbackContext) -> None:
-        """Abort implement turns that finish a model round with zero tools.
+        """Abort pure greeting rounds (zero tools so far this stream).
 
         ``after_model_call`` runs *before* tool execution, so we must inspect
         the model response for tool_calls rather than ``_tools_this_round``.
-        Greeting-only replies never hit explore_budget; soft-abort so
-        SessionHost can continue with CHAT_ONLY_NUDGE.
+        Only abort when this stream has not used explore tools yet — after
+        orientation, let the ReAct loop end naturally so SessionHost can
+        continue with a zero-mutation / resume nudge. Soft-aborting every
+        text-only round after a couple of reads was burning the full
+        continuation budget on greetings once ``any_tool_attempted`` stuck.
         """
         self._ensure_user_text(ctx)
         if self._workspace_mutated or self._aborted_for_explore:
@@ -346,6 +349,8 @@ class CodeEditNudgeRail(DeepAgentRail):
         if not looks_like_implement_task(self._user_text):
             return
         if self._response_has_tool_calls(ctx):
+            return
+        if self._explore_count > 0:
             return
         await self._abort_no_edit(ctx)
 

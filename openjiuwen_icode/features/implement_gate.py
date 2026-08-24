@@ -278,6 +278,14 @@ CHAT_ONLY_NUDGE = (
     "apply a concrete patch. Your next response must include a tool call."
 )
 
+RESUME_AFTER_CHAT_NUDGE = (
+    "You already used tools earlier in this turn, then replied without "
+    "tools and asked what to work on / claimed there is no task. The "
+    "implement task is still active. Do NOT greet or ask again. Call "
+    "`edit_file` or `write_file` now (read the target file first if "
+    "needed). Your next response must include a tool call."
+)
+
 # Prefixed onto headless ``icode run -t`` / implement prompts so weak models
 # do not confuse task specs (e.g. "## Configuration") with system setup.
 HEADLESS_TASK_ENVELOPE_MARKER = "# Implement this task now"
@@ -490,6 +498,7 @@ def is_headless_continuation_nudge(text: str) -> bool:
         return False
     for marker in (
         CHAT_ONLY_NUDGE,
+        RESUME_AFTER_CHAT_NUDGE,
         ZERO_MUTATION_NUDGE,
         WORKTREE_NUDGE,
         STALL_CONTINUATION_NUDGE,
@@ -1745,14 +1754,19 @@ def prompt_symbol_nudge(missing: tuple[str, ...] | list[str]) -> str:
     return PROMPT_SYMBOL_NUDGE_TEMPLATE.format(symbols=symbols or "(none)")
 
 
-def chat_only_continuation_nudge(user_text: str) -> str:
-    """Build a chat-only (zero-tool greeting) continuation nudge."""
+def chat_only_continuation_nudge(
+    user_text: str,
+    *,
+    any_tool_attempted: bool = False,
+) -> str:
+    """Build a zero-tool (greeting / ask-for-task) continuation nudge."""
+    base = RESUME_AFTER_CHAT_NUDGE if any_tool_attempted else CHAT_ONLY_NUDGE
     symbols = extract_required_prompt_symbols(user_text)[:6]
     if not symbols:
-        return CHAT_ONLY_NUDGE
+        return base
     listed = ", ".join(f"`{sym}`" for sym in symbols)
     return (
-        f"{CHAT_ONLY_NUDGE}\n\n"
+        f"{base}\n\n"
         f"The task names these APIs — locate and wire them under the repo cwd "
         f"(for example {listed}). Do not greet again."
     )
@@ -1770,7 +1784,9 @@ def zero_mutation_continuation_nudge(
     edit wording.
     """
     if not any_tool_attempted:
-        return chat_only_continuation_nudge(user_text)
+        return chat_only_continuation_nudge(
+            user_text, any_tool_attempted=False
+        )
     symbols = extract_required_prompt_symbols(user_text)[:6]
     if not symbols:
         return ZERO_MUTATION_NUDGE
@@ -1937,6 +1953,7 @@ def looks_like_explore_bash(command: str) -> bool:
 __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
     "CHAT_ONLY_NUDGE",
+    "RESUME_AFTER_CHAT_NUDGE",
     "MAX_CHAT_ONLY_CONTINUATIONS",
     "HEADLESS_TASK_ENVELOPE_MARKER",
     "is_headless_task_enveloped",

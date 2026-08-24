@@ -356,3 +356,26 @@ async def test_after_model_call_keeps_tool_round() -> None:
     await rail.after_model_call(ctx)
     agent.abort.assert_not_called()
     assert rail._aborted_for_explore is False
+
+
+@pytest.mark.asyncio
+async def test_after_model_call_skips_abort_after_explore_tools() -> None:
+    """Text-only rounds after orientation must not soft-abort mid-stream."""
+    rail = CodeEditNudgeRail(explore_budget=8)
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail._user_text = "Implement AutoToc in src/rules/auto-toc.ts"
+    rail._explore_count = 2
+    ctx = SimpleNamespace(
+        inputs=SimpleNamespace(
+            response=SimpleNamespace(
+                tool_calls=None,
+                content="What would you like me to work on?",
+            ),
+            messages=[],
+        )
+    )
+    await rail.after_model_call(ctx)
+    agent.abort.assert_not_called()
+    assert rail._aborted_for_explore is False

@@ -1538,3 +1538,9 @@ def test_chat_only_nudge_and_greeting_detection() -> None:
         )
         == chat_only_continuation_nudge(task)
     )
+
+    from openjiuwen_icode.features.implement_gate import RESUME_AFTER_CHAT_NUDGE
+
+    resume = chat_only_continuation_nudge(task, any_tool_attempted=True)
+    assert resume.startswith(RESUME_AFTER_CHAT_NUDGE[:40])
+    assert is_headless_continuation_nudge(RESUME_AFTER_CHAT_NUDGE)

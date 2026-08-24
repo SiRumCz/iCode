@@ -390,18 +390,28 @@ class SessionHost:
                     any_tool_attempted=any_tool_attempted,
                 )
 
-            def _empty_worktree_nudge() -> str:
+            def _empty_worktree_nudge(*, stream_saw_tool: bool) -> str:
                 if mutate_attempted:
                     return WORKTREE_NUDGE
+                # Per-stream: zero tools this stream → chat/resume nudge even
+                # if earlier streams already called tools.
+                if not stream_saw_tool:
+                    return chat_only_continuation_nudge(
+                        _task_text(),
+                        any_tool_attempted=any_tool_attempted,
+                    )
                 return zero_mutation_continuation_nudge(
-                    _task_text(), any_tool_attempted=any_tool_attempted
+                    _task_text(), any_tool_attempted=True
                 )
 
-            def _should_stop_chat_only(stream_saw_tool: bool) -> bool:
-                """True when another chat-only continuation would exceed the cap."""
-                if stream_saw_tool or mutate_attempted or any_tool_attempted:
+            def _should_stop_zero_tool_stream(stream_saw_tool: bool) -> bool:
+                """Cap zero-tool streams per turn (ignore sticky prior tools)."""
+                if stream_saw_tool or mutate_attempted:
                     return False
                 return chat_only_continuations >= max_chat_only
+
+            def _is_zero_tool_stream(stream_saw_tool: bool) -> bool:
+                return (not stream_saw_tool) and (not mutate_attempted)
 
             await self._bus.publish(
                 TurnStarted(text=event.text, session_id=sid)
@@ -603,18 +613,15 @@ class SessionHost:
                         and looks_like_implement_task(_task_text())
                         and not _workspace_deliverable()
                     ):
-                        chat_only_stream = (
-                            not stream_saw_tool
-                            and not mutate_attempted
-                            and not any_tool_attempted
-                        )
-                        if chat_only_stream and _should_stop_chat_only(
+                        chat_only_stream = _is_zero_tool_stream(stream_saw_tool)
+                        if chat_only_stream and _should_stop_zero_tool_stream(
                             stream_saw_tool
                         ):
                             raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
-                        forced = _empty_worktree_nudge()
+                        forced = _empty_worktree_nudge(
+                            stream_saw_tool=stream_saw_tool
+                        )
                         if chat_only_stream:
-                            forced = chat_only_continuation_nudge(_task_text())
                             chat_only_continuations += 1
                         logger.warning(
                             "implement stream aborted (explore soft-stop); "
@@ -676,18 +683,17 @@ class SessionHost:
                 # Headless code tasks: require mutate → (full edit) →
                 # integration → prompt symbols → verify → submit.
                 nudge = _continuation_nudge()
-                chat_only_stream = (
-                    not stream_saw_tool
-                    and not mutate_attempted
-                    and not any_tool_attempted
-                )
+                chat_only_stream = _is_zero_tool_stream(stream_saw_tool)
                 if chat_only_stream:
-                    # Prefer the chat-only nudge over explore-without-edit
-                    # wording when the model never called tools.
-                    nudge = chat_only_continuation_nudge(_task_text())
+                    # Prefer chat/resume nudge over explore-without-edit
+                    # wording when *this* stream never called tools.
+                    nudge = chat_only_continuation_nudge(
+                        _task_text(),
+                        any_tool_attempted=any_tool_attempted,
+                    )
                 if nudge is not None and continuation_attempts < max_continuations:
                     if chat_only_stream:
-                        if _should_stop_chat_only(stream_saw_tool):
+                        if _should_stop_zero_tool_stream(stream_saw_tool):
                             raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
                         chat_only_continuations += 1
                     continuation_attempts += 1
@@ -705,16 +711,14 @@ class SessionHost:
                     and looks_like_implement_task(task_text)
                     and not _workspace_deliverable()
                 ):
-                    forced = _empty_worktree_nudge()
-                    chat_only_stream = (
-                        not stream_saw_tool
-                        and not mutate_attempted
-                        and not any_tool_attempted
+                    chat_only_stream = _is_zero_tool_stream(stream_saw_tool)
+                    if chat_only_stream and _should_stop_zero_tool_stream(
+                        stream_saw_tool
+                    ):
+                        raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+                    forced = _empty_worktree_nudge(
+                        stream_saw_tool=stream_saw_tool
                     )
-                    if chat_only_stream:
-                        if _should_stop_chat_only(stream_saw_tool):
-                            raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
-                        forced = chat_only_continuation_nudge(task_text)
                     if continuation_attempts < max_continuations:
                         if chat_only_stream:
                             chat_only_continuations += 1
