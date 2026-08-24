@@ -3,7 +3,8 @@
 #   1. Optionally bump / set the project version (CLI + VS Code extension);
 #      commit if it changed
 #   2. Tag HEAD as vX.Y.Z and push commits/tags to origin (GitCode) + github
-#   3. Build macOS + Linux PyApp binaries + vscode-icode .vsix into dist/release
+#   3. Build macOS PyApp binaries (+ optional Linux via --linux) + vscode-icode
+#      .vsix into dist/release
 #   4. Optionally publish artifacts to GitCode + GitHub releases (concurrent)
 #
 # Usage:
@@ -21,6 +22,8 @@
 # Build options:
 #   --uv                 Pass --uv to slim PyApp builds
 #   --full               Also build full-deps offline binaries (*-full-*)
+#   --linux              Also build Linux musl targets (uses Docker by default)
+#   --docker             Force Docker for Linux targets (implies --linux)
 #   --no-docker          Linux builds without Docker (native Linux + musl only)
 #   --skip-build         Version bump/commit/tag/push only
 #   --out-dir DIR        Release output dir (default: dist/release)
@@ -39,8 +42,9 @@
 # out with no input, uploads proceed. GitCode needs GITCODE_TOKEN; GitHub needs
 # `gh` auth (or GH_TOKEN). Uploads run concurrently in the background.
 #
-# macOS binaries require a Darwin host; Linux targets use Docker when available.
-# Windows is intentionally omitted (needs a Windows runner).
+# Default builds are macOS-only (no Docker cross-compile). Pass --linux to
+# also build Linux musl targets (Docker when available). Windows needs a
+# Windows runner and is intentionally omitted here.
 
 set -euo pipefail
 
@@ -52,7 +56,9 @@ VERSION_MODE="bump"       # bump | set | keep
 BUMP_PART="patch"
 SET_VERSION=""
 USE_UV=false
-USE_DOCKER=true
+USE_DOCKER=false
+DOCKER_SET=false
+BUILD_LINUX=false
 SKIP_BUILD=false
 DRY_RUN=false
 BUILD_FULL=false
@@ -92,10 +98,14 @@ Git:
 Build:
   --uv                       Use uv installer in slim PyApp binaries
   --full                     Also build full-deps offline binaries (*-full-*)
-  --no-docker                Do not use Docker for Linux targets
+  --linux                    Also build Linux musl targets (Docker by default)
+  --docker                   Use Docker for Linux targets (implies --linux)
+  --no-docker                Linux without Docker (native musl only; with --linux)
   --skip-build               Only handle version / commit / tag / push
   --out-dir DIR              Collect artifacts here (default: dist/release)
   --dry-run                  Show plan only
+
+  Default: macOS binaries only (no Docker cross-compile).
 
 Remotes (defaults):
   origin                     GitCode primary (development)
@@ -105,12 +115,12 @@ Examples:
   ./scripts/pyapp/release.sh
   ./scripts/pyapp/release.sh --no-bump
   ./scripts/pyapp/release.sh --no-bump --full
+  ./scripts/pyapp/release.sh --no-bump --linux --docker
   ./scripts/pyapp/release.sh --version 0.2.0
   ./scripts/pyapp/release.sh --bump minor --out-dir dist/release-0.2.0
   GITCODE_TOKEN=... ./scripts/pyapp/release.sh --no-bump --full --publish
 EOF
 }
-
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --bump)
@@ -135,7 +145,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --uv) USE_UV=true; shift ;;
         --full) BUILD_FULL=true; shift ;;
-        --no-docker) USE_DOCKER=false; shift ;;
+        --linux) BUILD_LINUX=true; shift ;;
+        --docker) BUILD_LINUX=true; USE_DOCKER=true; DOCKER_SET=true; shift ;;
+        --no-docker) USE_DOCKER=false; DOCKER_SET=true; shift ;;
         --skip-build) SKIP_BUILD=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --no-tag) DO_TAG=false; shift ;;
@@ -821,9 +833,18 @@ if [[ "$SKIP_BUILD" == "true" ]]; then
     exit 0
 fi
 
-# ── Build macOS + Linux (single pass so --package does not wipe peers) ─
+# ── Build macOS (default); optional Linux with --linux ─
 pyapp_require_cmd curl perl cargo
-RELEASE_TARGETS="x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,aarch64-apple-darwin,x86_64-apple-darwin"
+# Default: native macOS only — avoid Docker aarch64/x86_64 musl cross builds
+# (ring + aarch64-linux-musl-gcc often SIGSEGV on cross toolchains).
+RELEASE_TARGETS="aarch64-apple-darwin,x86_64-apple-darwin"
+if [[ "$BUILD_LINUX" == "true" ]]; then
+    RELEASE_TARGETS="x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,${RELEASE_TARGETS}"
+    # --linux defaults to Docker unless the user passed --no-docker.
+    if [[ "$DOCKER_SET" != "true" ]]; then
+        USE_DOCKER=true
+    fi
+fi
 BUILD_ARGS=(--package --targets "$RELEASE_TARGETS")
 [[ "$USE_UV" == "true" ]] && BUILD_ARGS+=(--uv)
 [[ "$BUILD_FULL" == "true" ]] && BUILD_ARGS+=(--full)
@@ -833,10 +854,16 @@ BUILD_ARGS=(--package --targets "$RELEASE_TARGETS")
 export PROJECT_VERSION="$NEW_VERSION"
 
 echo
-if [[ "$BUILD_FULL" == "true" ]]; then
-    pyapp_log "Building Linux + macOS binaries (slim + full)..."
+if [[ "$BUILD_LINUX" == "true" ]]; then
+    if [[ "$BUILD_FULL" == "true" ]]; then
+        pyapp_log "Building macOS + Linux binaries (slim + full)..."
+    else
+        pyapp_log "Building macOS + Linux binaries (slim only; pass --full for offline bundles)..."
+    fi
+elif [[ "$BUILD_FULL" == "true" ]]; then
+    pyapp_log "Building macOS binaries only (slim + full; pass --linux for Linux)..."
 else
-    pyapp_log "Building Linux + macOS binaries (slim only; pass --full for offline bundles)..."
+    pyapp_log "Building macOS binaries only (slim; pass --linux for Linux, --full for offline)..."
 fi
 set +e
 "$SCRIPT_DIR/build-multi.sh" "${BUILD_ARGS[@]}"
@@ -889,7 +916,7 @@ ARTIFACTS=(
 )
 shopt -u nullglob
 if [[ ${#ARTIFACTS[@]} -eq 0 ]]; then
-    pyapp_die "no macOS/Linux/extension release artifacts found in $OUT_DIR"
+    pyapp_die "no macOS/extension release artifacts found in $OUT_DIR (pass --linux for Linux targets)"
 fi
 
 pyapp_log "Release ready: v${NEW_VERSION}"
