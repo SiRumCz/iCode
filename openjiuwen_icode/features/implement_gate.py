@@ -267,16 +267,42 @@ TOOL_RUNTIME_NUDGE = (
     "object into `file_path`. Then continue the original task."
 )
 
+CHAT_ONLY_NUDGE = (
+    "You replied with an introduction or asked what to work on, but did not "
+    "call any tools. The implement task is already in the user message — do "
+    "NOT introduce yourself, list your capabilities, or ask what to work on. "
+    "Immediately call `list_files`, `grep`, or `read_file` under the repo "
+    "cwd, then `edit_file` / `write_file` to apply a concrete patch. Your "
+    "next response must include a tool call."
+)
+
 ZERO_MUTATION_NUDGE = (
-    "You analyzed the codebase but did not modify any files. "
+    "You used tools but did not modify any files in the worktree. "
     "The user asked you to implement changes. Call `edit_file` or "
-    "`write_file` now to apply a concrete patch in the worktree. "
+    "`write_file` now to apply a concrete patch. "
     "Do not run another round of grep, git log, go test, or go build "
     "before the first successful edit. "
     "Do not search git history for an upstream PR — this checkout is often "
     "at a pruned base commit with no solution commits to find. "
     "Do not stop after another design essay. When the patch is in place, "
     "run any required submit/deliver command (for example `lolbench-submit`)."
+)
+
+# How many headless chat-only (zero-tool) continuations before fail-closed.
+MAX_CHAT_ONLY_CONTINUATIONS = 3
+
+_GREETING_MARKERS = (
+    "what would you like me to work on",
+    "what would you like me to help",
+    "what would you like to work on",
+    "ready to help",
+    "i'm **icode**",
+    "i am **icode**",
+    "i'm icode",
+    "i am icode",
+    "just let me know the task",
+    "just describe the task",
+    "just tell me what you'd like",
 )
 
 WORKTREE_NUDGE = (
@@ -435,6 +461,7 @@ def is_headless_continuation_nudge(text: str) -> bool:
     if _ORIGINAL_TASK_MARKER in stripped:
         return False
     for marker in (
+        CHAT_ONLY_NUDGE,
         ZERO_MUTATION_NUDGE,
         WORKTREE_NUDGE,
         STALL_CONTINUATION_NUDGE,
@@ -454,6 +481,25 @@ def is_headless_continuation_nudge(text: str) -> bool:
             return True
     if stripped.startswith("Your patch is missing symbols/APIs the user named:"):
         return True
+    return False
+
+
+def looks_like_greeting_response(text: str) -> bool:
+    """Return True when *text* looks like a capability intro / ask-for-task reply."""
+    stripped = (text or "").strip().lower()
+    if not stripped:
+        return False
+    hits = sum(1 for marker in _GREETING_MARKERS if marker in stripped)
+    if hits >= 2:
+        return True
+    if hits >= 1 and len(stripped) < 2500:
+        # Single strong ask-what-to-do marker is enough for short intros.
+        ask_markers = (
+            "what would you like me to work on",
+            "what would you like me to help",
+            "what would you like to work on",
+        )
+        return any(m in stripped for m in ask_markers)
     return False
 
 
@@ -1642,8 +1688,32 @@ def prompt_symbol_nudge(missing: tuple[str, ...] | list[str]) -> str:
     return PROMPT_SYMBOL_NUDGE_TEMPLATE.format(symbols=symbols or "(none)")
 
 
-def zero_mutation_continuation_nudge(user_text: str) -> str:
-    """Build a zero-mutation nudge, optionally listing APIs named in the task."""
+def chat_only_continuation_nudge(user_text: str) -> str:
+    """Build a chat-only (zero-tool greeting) continuation nudge."""
+    symbols = extract_required_prompt_symbols(user_text)[:6]
+    if not symbols:
+        return CHAT_ONLY_NUDGE
+    listed = ", ".join(f"`{sym}`" for sym in symbols)
+    return (
+        f"{CHAT_ONLY_NUDGE}\n\n"
+        f"The task names these APIs — locate and wire them under the repo cwd "
+        f"(for example {listed}). Do not greet again."
+    )
+
+
+def zero_mutation_continuation_nudge(
+    user_text: str,
+    *,
+    any_tool_attempted: bool = True,
+) -> str:
+    """Build a zero-mutation nudge, optionally listing APIs named in the task.
+
+    When *any_tool_attempted* is False the model only chatted (greeting /
+    ask-for-task) — use :data:`CHAT_ONLY_NUDGE` instead of the explore-without-
+    edit wording.
+    """
+    if not any_tool_attempted:
+        return chat_only_continuation_nudge(user_text)
     symbols = extract_required_prompt_symbols(user_text)[:6]
     if not symbols:
         return ZERO_MUTATION_NUDGE
@@ -1675,12 +1745,15 @@ def next_implement_continuation(
     typescript_mutated: bool = False,
     typescript_suite_verified: bool = False,
     typescript_suite_passed_unqualified: bool = False,
+    any_tool_attempted: bool = True,
 ) -> str | None:
     """Pick the next headless continuation nudge, or None if done."""
     if not looks_like_implement_task(user_text):
         return None
     if not mutate_attempted:
-        return zero_mutation_continuation_nudge(user_text)
+        return zero_mutation_continuation_nudge(
+            user_text, any_tool_attempted=any_tool_attempted
+        )
     if not workspace_mutated:
         return WORKTREE_NUDGE
     if shallow_only:
@@ -1806,6 +1879,8 @@ def looks_like_explore_bash(command: str) -> bool:
 
 __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
+    "CHAT_ONLY_NUDGE",
+    "MAX_CHAT_ONLY_CONTINUATIONS",
     "GO_SUITE_NUDGE",
     "TS_SUITE_NUDGE",
     "TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE",
@@ -1823,8 +1898,10 @@ __all__ = [
     "VERIFY_NUDGE",
     "WORKTREE_NUDGE",
     "wrap_implement_continuation_query",
+    "chat_only_continuation_nudge",
     "zero_mutation_continuation_nudge",
     "ZERO_MUTATION_NUDGE",
+    "looks_like_greeting_response",
     "bash_output_indicates_failure",
     "bash_result_succeeded",
     "edit_args_look_shallow",

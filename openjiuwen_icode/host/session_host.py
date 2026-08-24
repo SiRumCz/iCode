@@ -293,6 +293,8 @@ class SessionHost:
         mutation_blob_parts: list[str] = []
         pending_mutation_args: dict[str, Any] = {}
         continuation_attempts = 0
+        chat_only_continuations = 0
+        any_tool_attempted = False
         # Allow zero-mutation → shallow → integration → symbols → native →
         # go-suite → python-suite → verify → verify-failed → submit chain.
         max_continuations = 10 if self._auto_approve else 0
@@ -301,9 +303,10 @@ class SessionHost:
         try:
             from openjiuwen_icode.features.implement_gate import (
                 INCOMPLETE_IMPLEMENT_ERROR,
+                MAX_CHAT_ONLY_CONTINUATIONS,
                 WORKTREE_NUDGE,
-                ZERO_MUTATION_NUDGE,
                 bash_result_succeeded,
+                chat_only_continuation_nudge,
                 edit_args_look_shallow,
                 extract_bash_command,
                 extract_bash_command_from_result,
@@ -326,6 +329,7 @@ class SessionHost:
                 tool_runtime_continuation_nudge,
                 verify_command_qualifies_for_completion,
                 wrap_implement_continuation_query,
+                zero_mutation_continuation_nudge,
             )
             from openjiuwen_icode.features.mutations import (
                 MUTATING_TOOLS,
@@ -335,6 +339,10 @@ class SessionHost:
             )
             from openjiuwen_icode.features.stream_stall import (
                 StreamStallError,
+            )
+
+            max_chat_only = (
+                MAX_CHAT_ONLY_CONTINUATIONS if self._auto_approve else 0
             )
 
             def _task_text() -> str:
@@ -379,7 +387,21 @@ class SessionHost:
                     typescript_suite_passed_unqualified=(
                         typescript_suite_passed_unqualified
                     ),
+                    any_tool_attempted=any_tool_attempted,
                 )
+
+            def _empty_worktree_nudge() -> str:
+                if mutate_attempted:
+                    return WORKTREE_NUDGE
+                return zero_mutation_continuation_nudge(
+                    _task_text(), any_tool_attempted=any_tool_attempted
+                )
+
+            def _should_stop_chat_only(stream_saw_tool: bool) -> bool:
+                """True when another chat-only continuation would exceed the cap."""
+                if stream_saw_tool or mutate_attempted or any_tool_attempted:
+                    return False
+                return chat_only_continuations >= max_chat_only
 
             await self._bus.publish(
                 TurnStarted(text=event.text, session_id=sid)
@@ -387,6 +409,7 @@ class SessionHost:
             while True:
                 pending: list[ApprovalRequest | QuestionToUser] = []
                 saw_stream_text = False
+                stream_saw_tool = False
                 try:
                     stream = self._backend.run_streaming(
                         query,
@@ -404,6 +427,8 @@ class SessionHost:
                                 else:
                                     assistant_parts.append(ev.text)
                             if isinstance(ev, ToolCallStart):
+                                stream_saw_tool = True
+                                any_tool_attempted = True
                                 if ev.tool_name in MUTATING_TOOLS:
                                     if ev.tool_call_id:
                                         pending_mutation_args[ev.tool_call_id] = (
@@ -578,11 +603,19 @@ class SessionHost:
                         and looks_like_implement_task(_task_text())
                         and not _workspace_deliverable()
                     ):
-                        forced = (
-                            WORKTREE_NUDGE
-                            if mutate_attempted
-                            else ZERO_MUTATION_NUDGE
+                        chat_only_stream = (
+                            not stream_saw_tool
+                            and not mutate_attempted
+                            and not any_tool_attempted
                         )
+                        if chat_only_stream and _should_stop_chat_only(
+                            stream_saw_tool
+                        ):
+                            raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+                        forced = _empty_worktree_nudge()
+                        if chat_only_stream:
+                            forced = chat_only_continuation_nudge(_task_text())
+                            chat_only_continuations += 1
                         logger.warning(
                             "implement stream aborted (explore soft-stop); "
                             "continuing (%s/%s)",
@@ -643,7 +676,20 @@ class SessionHost:
                 # Headless code tasks: require mutate → (full edit) →
                 # integration → prompt symbols → verify → submit.
                 nudge = _continuation_nudge()
+                chat_only_stream = (
+                    not stream_saw_tool
+                    and not mutate_attempted
+                    and not any_tool_attempted
+                )
+                if chat_only_stream:
+                    # Prefer the chat-only nudge over explore-without-edit
+                    # wording when the model never called tools.
+                    nudge = chat_only_continuation_nudge(_task_text())
                 if nudge is not None and continuation_attempts < max_continuations:
+                    if chat_only_stream:
+                        if _should_stop_chat_only(stream_saw_tool):
+                            raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+                        chat_only_continuations += 1
                     continuation_attempts += 1
                     query = wrap_implement_continuation_query(
                         _task_text(), nudge
@@ -659,10 +705,19 @@ class SessionHost:
                     and looks_like_implement_task(task_text)
                     and not _workspace_deliverable()
                 ):
-                    forced = (
-                        WORKTREE_NUDGE if mutate_attempted else ZERO_MUTATION_NUDGE
+                    forced = _empty_worktree_nudge()
+                    chat_only_stream = (
+                        not stream_saw_tool
+                        and not mutate_attempted
+                        and not any_tool_attempted
                     )
+                    if chat_only_stream:
+                        if _should_stop_chat_only(stream_saw_tool):
+                            raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+                        forced = chat_only_continuation_nudge(task_text)
                     if continuation_attempts < max_continuations:
+                        if chat_only_stream:
+                            chat_only_continuations += 1
                         continuation_attempts += 1
                         query = wrap_implement_continuation_query(
                             task_text, forced

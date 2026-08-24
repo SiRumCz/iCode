@@ -1483,3 +1483,44 @@ def test_verify_rejected_without_workspace_changes() -> None:
         )
         is False
     )
+
+
+def test_chat_only_nudge_and_greeting_detection() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        CHAT_ONLY_NUDGE,
+        chat_only_continuation_nudge,
+        looks_like_greeting_response,
+        zero_mutation_continuation_nudge,
+    )
+
+    greeting = (
+        "I'm **iCode**, your AI coding agent.\n\n"
+        "What would you like me to work on?"
+    )
+    assert looks_like_greeting_response(greeting)
+    assert not looks_like_greeting_response(
+        "I'll edit src/foo.ts to add the flag."
+    )
+    assert is_headless_continuation_nudge(CHAT_ONLY_NUDGE)
+
+    task = "Implement shared toolbar focus in quill"
+    chat = zero_mutation_continuation_nudge(task, any_tool_attempted=False)
+    assert chat.startswith(CHAT_ONLY_NUDGE[:40])
+    assert "do NOT introduce yourself" in chat or "NOT introduce" in chat
+
+    explored = zero_mutation_continuation_nudge(task, any_tool_attempted=True)
+    assert explored.startswith(ZERO_MUTATION_NUDGE[:40])
+    assert chat != explored
+
+    assert (
+        next_implement_continuation(
+            user_text=task,
+            mutate_attempted=False,
+            verify_attempted=False,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=True,
+            any_tool_attempted=False,
+        )
+        == chat_only_continuation_nudge(task)
+    )

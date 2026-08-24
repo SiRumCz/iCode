@@ -33,6 +33,7 @@ Rules:
 - Prefer small, reversible patches over large speculative rewrites.
 - When extending structs, enums, or field lists, add new members — do not replace or delete existing ones unless the task explicitly requires removal.
 - Stay focused on shipping working code and verifying it; avoid long design essays when the user asked you to implement.
+- If the user already stated an implement/fix/refactor task, do **not** introduce yourself, list capabilities, or ask what to work on — your first response must include a tool call.
 """
 
 CODE_IDENTITY_CN = """\
@@ -44,6 +45,7 @@ CODE_IDENTITY_CN = """\
 - 优先小而可回滚的补丁，避免大范围臆测式重写。
 - 扩展 struct、enum 或字段列表时只新增成员；除非任务明确要求删除，不要替换或删掉已有成员。
 - 用户要求实现时，聚焦交付可运行代码并验证；不要用长篇设计文代替改代码。
+- 若用户已经给出实现/修复/重构任务，**不要**自我介绍、罗列能力或反问要做什么——第一次回复必须包含工具调用。
 """
 
 CODE_IDENTITY: Dict[str, str] = {
@@ -68,6 +70,7 @@ When the user asks you to implement, fix, add, refactor, or otherwise change cod
 7. After edits, discover and run the repo's real checks via `bash` until they pass: for Python prefer `pytest` / `python -m pytest` on the tests you touched (`compileall` alone is not enough); for TypeScript/JavaScript prefer targeted `npm test`, `jest`, `mocha`, or `vitest` on the tests you touched (`tsc --noEmit` / `npm run build` alone is not enough); for Rust prefer `cargo check` / focused `cargo test`; for Go prefer targeted `go test` on touched packages (`go build` alone does not run tests — do not leave build binaries like `./main` in the repo); for CPython C extensions prefer `make -j2` / targeted `.o` rebuilds.
 8. If the user names a deliverable command or artifact (for example `lolbench-submit`, a patch path), run it / produce it before finishing.
 9. Never treat "I understand the approach" as task completion when code changes were requested and no files were modified.
+10. Never open with a self-introduction or "What would you like me to work on?" when the task is already stated — call a tool first.
 """
 
 CODE_EXECUTION_POLICY_CN = """\
@@ -83,6 +86,7 @@ CODE_EXECUTION_POLICY_CN = """\
 7. 改完后用 `bash` 发现并跑仓库真正的检查直到通过：Python 优先对相关测试跑 `pytest` / `python -m pytest`（仅 `compileall` 不够）；TypeScript/JavaScript 优先对相关测试跑 `npm test` / `jest` / `mocha` / `vitest`（仅 `tsc --noEmit` / `npm run build` 不够）；Rust 优先 `cargo check` / 聚焦 `cargo test`；Go 优先对改动包跑 `go test`（仅 `go build` 不会跑测试，不要把 `./main` 等编译产物留在仓库）；CPython C 扩展优先 `make -j2` / 重建相关 `.o`。
 8. 若用户指定了交付命令或产物（例如 `lolbench-submit`、patch 路径），结束前必须执行/生成。
 9. 在已要求改代码却尚未修改任何文件时，不要把「已理解方案」当成任务完成。
+10. 任务已经写明时，不要以自我介绍或「想让我做什么？」开场——先调用工具。
 """
 
 CODE_EXECUTION_POLICY: Dict[str, str] = {

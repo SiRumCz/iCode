@@ -40,7 +40,9 @@ _EXPLORE_TOOLS = frozenset(
 )
 
 _SECTION = "code_edit_nudge"
+_NO_GREETING_SECTION = "code_no_greeting"
 _PRIORITY = 96
+_NO_GREETING_PRIORITY = 95
 
 _NUDGE_EN = (
     "## Edit-now reminder\n"
@@ -56,6 +58,21 @@ _NUDGE_CN = (
     "你已连续多轮只做探索（读/搜），尚未调用 `edit_file` / `write_file`。"
     "用户要求修改代码。本轮请停止继续搜索，立刻用 `edit_file` 或 "
     "`write_file` 落一个小而可运行的补丁，而不是继续分析。"
+)
+
+_NO_GREETING_EN = (
+    "## Do not greet on implement tasks\n"
+    "The user already gave a concrete coding task. Do NOT introduce "
+    "yourself, list your capabilities, or ask what to work on. Your "
+    "first action must be a tool call (`list_files` / `grep` / "
+    "`read_file` / `edit_file` / `write_file`)."
+)
+
+_NO_GREETING_CN = (
+    "## 实现任务禁止寒暄\n"
+    "用户已经给出具体编码任务。不要自我介绍、罗列能力，或反问要做什么。"
+    "第一步必须调用工具（`list_files` / `grep` / `read_file` / "
+    "`edit_file` / `write_file`）。"
 )
 
 
@@ -95,9 +112,10 @@ def reset_stream_rails(agent: Any) -> None:
 def tighten_edit_rails_for_continuation(agent: Any) -> None:
     """Use a short explore budget on SessionHost continuation streams.
 
-    After a ZERO_MUTATION / WORKTREE nudge the agent should edit immediately,
-    not burn another full explore window on grep/go test loops. Allow a few
-    reads so the model can locate the write target before hard-abort.
+    After a ZERO_MUTATION / WORKTREE / CHAT_ONLY nudge the agent should
+    edit immediately, not burn another full explore window on grep/go
+    test loops. Allow a few reads so the model can locate the write
+    target before hard-abort.
     """
     for rail in _iter_code_edit_rails(agent):
         # Continuation streams must edit soon — a couple of reads is ok.
@@ -167,15 +185,9 @@ class CodeEditNudgeRail(DeepAgentRail):
         if text:
             self._user_text = text
 
-    async def _maybe_abort_explore_only(self, ctx: AgentCallbackContext) -> None:
-        if (
-            self._workspace_mutated
-            or self._aborted_for_explore
-            or (
-                self._explore_count < self.explore_abort_cap
-                and self._model_rounds < self.model_abort_cap
-            )
-        ):
+    async def _abort_no_edit(self, ctx: AgentCallbackContext) -> None:
+        """Soft-abort explore/chat-only streams so SessionHost can continue."""
+        if self._workspace_mutated or self._aborted_for_explore:
             return
         self._ensure_user_text(ctx)
         if not looks_like_implement_task(self._user_text):
@@ -187,9 +199,43 @@ class CodeEditNudgeRail(DeepAgentRail):
         self._aborted_for_explore = True
         await abort()
 
+    async def _maybe_abort_explore_only(self, ctx: AgentCallbackContext) -> None:
+        if (
+            self._workspace_mutated
+            or self._aborted_for_explore
+            or (
+                self._explore_count < self.explore_abort_cap
+                and self._model_rounds < self.model_abort_cap
+            )
+        ):
+            return
+        await self._abort_no_edit(ctx)
+
     async def _count_explore(self, ctx: AgentCallbackContext) -> None:
         self._explore_count += 1
         await self._maybe_abort_explore_only(ctx)
+
+    def _inject_no_greeting(self, builder: Any) -> None:
+        remove = getattr(builder, "remove_section", None)
+        if callable(remove):
+            remove(_NO_GREETING_SECTION)
+        lang = getattr(builder, "language", "en") or "en"
+        text = (
+            _NO_GREETING_CN
+            if str(lang).startswith("zh") or lang == "cn"
+            else _NO_GREETING_EN
+        )
+        builder.add_section(
+            PromptSection(
+                name=_NO_GREETING_SECTION,
+                content={
+                    "en": _NO_GREETING_EN,
+                    "cn": _NO_GREETING_CN,
+                    lang: text,
+                },
+                priority=_NO_GREETING_PRIORITY,
+            )
+        )
 
     async def after_tool_call(self, ctx: AgentCallbackContext) -> None:
         self._ensure_user_text(ctx)
@@ -234,6 +280,18 @@ class CodeEditNudgeRail(DeepAgentRail):
         builder = self.system_prompt_builder
         if builder is None:
             return
+
+        # On implement tasks, always forbid greeting until a workspace edit.
+        if (
+            not self._workspace_mutated
+            and looks_like_implement_task(self._user_text)
+        ):
+            self._inject_no_greeting(builder)
+        else:
+            remove = getattr(builder, "remove_section", None)
+            if callable(remove):
+                remove(_NO_GREETING_SECTION)
+
         remove = getattr(builder, "remove_section", None)
         if callable(remove):
             remove(_SECTION)
@@ -250,6 +308,42 @@ class CodeEditNudgeRail(DeepAgentRail):
                 priority=_PRIORITY,
             )
         )
+
+    @staticmethod
+    def _response_has_tool_calls(ctx: AgentCallbackContext) -> bool:
+        """Return True when the latest model response requested tool calls."""
+        inputs = getattr(ctx, "inputs", None)
+        response = getattr(inputs, "response", None) if inputs is not None else None
+        if response is None:
+            return False
+        tool_calls = getattr(response, "tool_calls", None)
+        if tool_calls:
+            return True
+        # Dict-shaped responses / OpenAI-compatible payloads.
+        if isinstance(response, dict):
+            if response.get("tool_calls"):
+                return True
+            msg = response.get("message") or response.get("choices")
+            if isinstance(msg, dict) and msg.get("tool_calls"):
+                return True
+        return False
+
+    async def after_model_call(self, ctx: AgentCallbackContext) -> None:
+        """Abort implement turns that finish a model round with zero tools.
+
+        ``after_model_call`` runs *before* tool execution, so we must inspect
+        the model response for tool_calls rather than ``_tools_this_round``.
+        Greeting-only replies never hit explore_budget; soft-abort so
+        SessionHost can continue with CHAT_ONLY_NUDGE.
+        """
+        self._ensure_user_text(ctx)
+        if self._workspace_mutated or self._aborted_for_explore:
+            return
+        if not looks_like_implement_task(self._user_text):
+            return
+        if self._response_has_tool_calls(ctx):
+            return
+        await self._abort_no_edit(ctx)
 
 
 __all__ = [

@@ -467,8 +467,8 @@ async def test_non_implement_tool_crash_still_turn_failed() -> None:
 async def test_explore_abort_cancelled_continues_implement_turn() -> None:
     """CodeEditNudgeRail abort must soft-continue, not TurnFailed('turn cancelled')."""
     from openjiuwen_icode.features.implement_gate import (
+        CHAT_ONLY_NUDGE,
         INCOMPLETE_IMPLEMENT_ERROR,
-        ZERO_MUTATION_NUDGE,
     )
 
     bus = EventBus()
@@ -513,13 +513,76 @@ async def test_explore_abort_cancelled_continues_implement_turn() -> None:
     await host.stop()
 
     assert len(queries) >= 2
+    # Zero-tool soft-abort uses CHAT_ONLY_NUDGE (not explore-without-edit).
     assert any(
-        isinstance(q, str) and ZERO_MUTATION_NUDGE[:40] in q
+        isinstance(q, str) and CHAT_ONLY_NUDGE[:40] in q
         for q in queries[1:]
     )
     assert failed
     assert INCOMPLETE_IMPLEMENT_ERROR in failed[-1].error
     assert "turn cancelled" not in failed[-1].error
+
+
+@pytest.mark.asyncio
+async def test_chat_only_greeting_caps_continuations_early() -> None:
+    """Pure greeting streams must fail-closed within MAX_CHAT_ONLY_CONTINUATIONS."""
+    from openjiuwen.core.session.stream.base import OutputSchema
+
+    from openjiuwen_icode.features.implement_gate import (
+        CHAT_ONLY_NUDGE,
+        INCOMPLETE_IMPLEMENT_ERROR,
+        MAX_CHAT_ONLY_CONTINUATIONS,
+    )
+
+    bus = EventBus()
+    queries: list[object] = []
+
+    class GreetingBackend(DemoBackend):
+        async def run_streaming(
+            self, query: object, session_id: str | None = None
+        ):
+            queries.append(query)
+            yield OutputSchema(
+                type="llm_output",
+                index=0,
+                payload={
+                    "content": (
+                        "I'm **iCode**. What would you like me to work on?"
+                    )
+                },
+            )
+
+    backend = GreetingBackend()
+    host = SessionHost(
+        bus, backend, session_id="s1", auto_approve=True
+    )
+    failed: list[TurnFailed] = []
+    done = asyncio.Event()
+
+    async def on_fail(ev: TurnFailed) -> None:
+        failed.append(ev)
+        done.set()
+
+    await bus.subscribe(TurnFailed, on_fail)
+    await host.start()
+    await bus.publish(
+        UserMessage(
+            text="Implement shared toolbar focus in quill modules",
+            session_id="s1",
+        )
+    )
+    await asyncio.wait_for(done.wait(), timeout=5)
+    await host.stop()
+
+    # 1 initial + up to MAX_CHAT_ONLY_CONTINUATIONS continuations.
+    assert 2 <= len(queries) <= MAX_CHAT_ONLY_CONTINUATIONS + 1
+    assert any(
+        isinstance(q, str) and CHAT_ONLY_NUDGE[:40] in q for q in queries[1:]
+    )
+    assert failed
+    assert INCOMPLETE_IMPLEMENT_ERROR in failed[-1].error
+    # Must not burn the full generic continuation budget (10).
+    assert len(queries) < 10
 
 
 @pytest.mark.asyncio

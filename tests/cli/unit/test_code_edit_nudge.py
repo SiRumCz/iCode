@@ -307,3 +307,52 @@ async def test_out_of_workspace_edit_does_not_disable_explore_abort() -> None:
         await rail.before_model_call(ctx)
     assert rail._workspace_mutated is False
     agent.abort.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_no_greeting_section_injected_on_implement_task() -> None:
+    rail = CodeEditNudgeRail(explore_budget=8)
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+    rail._user_text = "Implement shared toolbar focus for Quill editors"
+    await rail.before_model_call(MagicMock())
+    assert "code_no_greeting" in builder.sections
+
+
+@pytest.mark.asyncio
+async def test_after_model_call_aborts_text_only_implement_round() -> None:
+    rail = CodeEditNudgeRail(explore_budget=8)
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail._user_text = "Implement AutoToc in src/rules/auto-toc.ts"
+    ctx = SimpleNamespace(
+        inputs=SimpleNamespace(
+            response=SimpleNamespace(tool_calls=None, content="I'm iCode"),
+            messages=[],
+        )
+    )
+    await rail.after_model_call(ctx)
+    agent.abort.assert_called_once()
+    assert rail._aborted_for_explore is True
+
+
+@pytest.mark.asyncio
+async def test_after_model_call_keeps_tool_round() -> None:
+    rail = CodeEditNudgeRail(explore_budget=8)
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail._user_text = "Implement AutoToc in src/rules/auto-toc.ts"
+    ctx = SimpleNamespace(
+        inputs=SimpleNamespace(
+            response=SimpleNamespace(
+                tool_calls=[SimpleNamespace(name="read_file")],
+                content="",
+            ),
+            messages=[],
+        )
+    )
+    await rail.after_model_call(ctx)
+    agent.abort.assert_not_called()
+    assert rail._aborted_for_explore is False
