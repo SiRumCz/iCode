@@ -239,8 +239,8 @@ def test_tighten_edit_rails_for_continuation() -> None:
     rail._explore_count = 9
     tighten_edit_rails_for_continuation(agent)
     assert rail.explore_budget == 0
-    assert rail.explore_abort_cap == 3
-    assert rail.model_abort_cap == 4
+    assert rail.explore_abort_cap == 1
+    assert rail.model_abort_cap == 3
     assert rail._explore_count == 0
 
 
@@ -359,14 +359,14 @@ async def test_after_model_call_keeps_tool_round() -> None:
 
 
 @pytest.mark.asyncio
-async def test_after_model_call_skips_abort_after_explore_tools() -> None:
-    """Text-only rounds after orientation must not soft-abort mid-stream."""
-    rail = CodeEditNudgeRail(explore_budget=8)
+async def test_after_model_call_aborts_greeting_after_explore() -> None:
+    """Post-explore text-only greetings must soft-abort for EDIT_ONLY nudge."""
+    rail = CodeEditNudgeRail(explore_budget=6, explore_abort_cap=8)
     agent = MagicMock()
     agent.abort = AsyncMock()
     rail.init(agent)
     rail._user_text = "Implement AutoToc in src/rules/auto-toc.ts"
-    rail._explore_count = 2
+    rail._explore_count = 7
     ctx = SimpleNamespace(
         inputs=SimpleNamespace(
             response=SimpleNamespace(
@@ -377,5 +377,46 @@ async def test_after_model_call_skips_abort_after_explore_tools() -> None:
         )
     )
     await rail.after_model_call(ctx)
-    agent.abort.assert_not_called()
-    assert rail._aborted_for_explore is False
+    agent.abort.assert_called_once()
+    assert rail._aborted_for_explore is True
+
+
+@pytest.mark.asyncio
+async def test_after_model_call_aborts_text_only_after_explore_budget() -> None:
+    rail = CodeEditNudgeRail(explore_budget=6, explore_abort_cap=8)
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail._user_text = "Implement AutoToc in src/rules/auto-toc.ts"
+    rail._explore_count = 6
+    ctx = SimpleNamespace(
+        inputs=SimpleNamespace(
+            response=SimpleNamespace(
+                tool_calls=None,
+                content="I'll summarize what I found so far.",
+            ),
+            messages=[],
+        )
+    )
+    await rail.after_model_call(ctx)
+    agent.abort.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_explore_abort_cap_triggers_soft_abort() -> None:
+    rail = CodeEditNudgeRail(explore_budget=6, explore_abort_cap=8)
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail._user_text = "Implement link-style rule in src/rules/link-style.ts"
+    for _ in range(8):
+        await rail.after_tool_call(
+            SimpleNamespace(
+                inputs=SimpleNamespace(
+                    tool_name="read_file",
+                    tool_args={"file_path": "/app/src/foo.ts"},
+                )
+            )
+        )
+    agent.abort.assert_called_once()
+    assert rail._aborted_for_explore is True

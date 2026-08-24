@@ -314,6 +314,24 @@ ZERO_MUTATION_NUDGE = (
     "run any required submit/deliver command (for example `lolbench-submit`)."
 )
 
+EDIT_ONLY_NUDGE = (
+    "You already explored the repository but did not call `edit_file` or "
+    "`write_file`. STOP using `list_files`, `grep`, `read_file`, `glob`, "
+    "`bash`, or git archaeology — you have enough context. Call "
+    "`edit_file` or `write_file` NOW on concrete paths under the repo cwd "
+    "and apply a small working patch for the task. Do NOT greet, ask what "
+    "to work on, or claim the message is only guidelines."
+)
+
+# Headless implement rails: orient briefly, then hard-stop explore loops.
+IMPLEMENT_EXPLORE_BUDGET = 6
+IMPLEMENT_EXPLORE_ABORT_CAP = 8
+IMPLEMENT_MODEL_ABORT_CAP = 10
+
+# Continuation streams after explore-without-edit: at most one more read.
+CONTINUATION_EXPLORE_ABORT_CAP = 1
+CONTINUATION_MODEL_ABORT_CAP = 3
+
 # How many headless chat-only (zero-tool) continuations before fail-closed.
 MAX_CHAT_ONLY_CONTINUATIONS = 3
 
@@ -499,6 +517,7 @@ def is_headless_continuation_nudge(text: str) -> bool:
     for marker in (
         CHAT_ONLY_NUDGE,
         RESUME_AFTER_CHAT_NUDGE,
+        EDIT_ONLY_NUDGE,
         ZERO_MUTATION_NUDGE,
         WORKTREE_NUDGE,
         STALL_CONTINUATION_NUDGE,
@@ -1787,12 +1806,13 @@ def zero_mutation_continuation_nudge(
         return chat_only_continuation_nudge(
             user_text, any_tool_attempted=False
         )
+    base = EDIT_ONLY_NUDGE
     symbols = extract_required_prompt_symbols(user_text)[:6]
     if not symbols:
-        return ZERO_MUTATION_NUDGE
+        return base
     listed = ", ".join(f"`{sym}`" for sym in symbols)
     return (
-        f"{ZERO_MUTATION_NUDGE}\n\n"
+        f"{base}\n\n"
         f"The task names these APIs — wire them under the repo cwd with "
         f"`edit_file` / `write_file` (for example {listed})."
     )
@@ -1958,6 +1978,12 @@ __all__ = [
     "HEADLESS_TASK_ENVELOPE_MARKER",
     "is_headless_task_enveloped",
     "wrap_headless_implement_prompt",
+    "EDIT_ONLY_NUDGE",
+    "IMPLEMENT_EXPLORE_BUDGET",
+    "IMPLEMENT_EXPLORE_ABORT_CAP",
+    "IMPLEMENT_MODEL_ABORT_CAP",
+    "CONTINUATION_EXPLORE_ABORT_CAP",
+    "CONTINUATION_MODEL_ABORT_CAP",
     "GO_SUITE_NUDGE",
     "TS_SUITE_NUDGE",
     "TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE",

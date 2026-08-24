@@ -489,12 +489,23 @@ def create_agent(
         from openjiuwen_icode.rails.code_edit_nudge import (
             CodeEditNudgeRail,
         )
+        from openjiuwen_icode.features.implement_gate import (
+            IMPLEMENT_EXPLORE_ABORT_CAP,
+            IMPLEMENT_EXPLORE_BUDGET,
+            IMPLEMENT_MODEL_ABORT_CAP,
+        )
         from openjiuwen_icode.rails.implement_completeness import (
             ImplementCompletenessRail,
         )
 
         rails.append(CodeTaskPlanningRail())
-        rails.append(CodeEditNudgeRail())
+        rails.append(
+            CodeEditNudgeRail(
+                explore_budget=IMPLEMENT_EXPLORE_BUDGET,
+                explore_abort_cap=IMPLEMENT_EXPLORE_ABORT_CAP,
+                model_abort_cap=IMPLEMENT_MODEL_ABORT_CAP,
+            )
+        )
         rails.append(ImplementCompletenessRail())
 
     # --- Interrupt rails ---

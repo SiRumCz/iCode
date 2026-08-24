@@ -12,8 +12,11 @@ from openjiuwen.core.single_agent.rail.base import AgentCallbackContext
 from openjiuwen.harness.rails.base import DeepAgentRail
 
 from openjiuwen_icode.features.implement_gate import (
+    CONTINUATION_EXPLORE_ABORT_CAP,
+    CONTINUATION_MODEL_ABORT_CAP,
     extract_bash_command,
     looks_like_explore_bash,
+    looks_like_greeting_response,
     looks_like_implement_task,
     primary_user_task_text,
 )
@@ -116,16 +119,13 @@ def reset_stream_rails(agent: Any) -> None:
 def tighten_edit_rails_for_continuation(agent: Any) -> None:
     """Use a short explore budget on SessionHost continuation streams.
 
-    After a ZERO_MUTATION / WORKTREE / CHAT_ONLY nudge the agent should
-    edit immediately, not burn another full explore window on grep/go
-    test loops. Allow a few reads so the model can locate the write
-    target before hard-abort.
+    After explore-without-edit the agent must patch immediately — at most
+    one more read to locate the write target, then hard-abort.
     """
     for rail in _iter_code_edit_rails(agent):
-        # Continuation streams must edit soon — a couple of reads is ok.
         rail.explore_budget = 0
-        rail.explore_abort_cap = 3
-        rail.model_abort_cap = 4
+        rail.explore_abort_cap = CONTINUATION_EXPLORE_ABORT_CAP
+        rail.model_abort_cap = CONTINUATION_MODEL_ABORT_CAP
         rail.reset_stream_state()
 
 
@@ -148,14 +148,20 @@ class CodeEditNudgeRail(DeepAgentRail):
         # before a hard stop. Hard abort is recovered by SessionHost as an
         # empty-worktree continuation — not TurnFailed.
         cap = explore_abort_cap
-        self.explore_abort_cap = max(
-            self.explore_budget + 1,
-            int(cap if cap is not None else 24),
-        )
-        self.model_abort_cap = max(
-            self.explore_budget + 1,
-            int(model_abort_cap if model_abort_cap is not None else 16),
-        )
+        if cap is not None:
+            self.explore_abort_cap = max(1, int(cap))
+        else:
+            self.explore_abort_cap = max(
+                self.explore_budget + 1,
+                24,
+            )
+        if model_abort_cap is not None:
+            self.model_abort_cap = max(1, int(model_abort_cap))
+        else:
+            self.model_abort_cap = max(
+                self.explore_budget + 1,
+                16,
+            )
         self._explore_count = 0
         self._workspace_mutated = False
         self._model_rounds = 0
@@ -332,16 +338,29 @@ class CodeEditNudgeRail(DeepAgentRail):
                 return True
         return False
 
-    async def after_model_call(self, ctx: AgentCallbackContext) -> None:
-        """Abort pure greeting rounds (zero tools so far this stream).
+    @staticmethod
+    def _response_text(ctx: AgentCallbackContext) -> str:
+        """Best-effort assistant text from the latest model response."""
+        inputs = getattr(ctx, "inputs", None)
+        response = getattr(inputs, "response", None) if inputs is not None else None
+        if response is None:
+            return ""
+        content = getattr(response, "content", None)
+        if content:
+            return str(content)
+        if isinstance(response, dict):
+            return str(response.get("content") or "")
+        return ""
 
-        ``after_model_call`` runs *before* tool execution, so we must inspect
-        the model response for tool_calls rather than ``_tools_this_round``.
-        Only abort when this stream has not used explore tools yet — after
-        orientation, let the ReAct loop end naturally so SessionHost can
-        continue with a zero-mutation / resume nudge. Soft-aborting every
-        text-only round after a couple of reads was burning the full
-        continuation budget on greetings once ``any_tool_attempted`` stuck.
+    async def after_model_call(self, ctx: AgentCallbackContext) -> None:
+        """Soft-abort implement streams that stall without editing.
+
+        ``after_model_call`` runs *before* tool execution, so we inspect the
+        model response for tool_calls rather than post-hoc tool counters.
+
+        - Zero explore + text-only → greeting at task start → abort.
+        - Post-explore text-only (especially greetings) → abort so SessionHost
+          can continue with :data:`EDIT_ONLY_NUDGE`.
         """
         self._ensure_user_text(ctx)
         if self._workspace_mutated or self._aborted_for_explore:
@@ -350,9 +369,15 @@ class CodeEditNudgeRail(DeepAgentRail):
             return
         if self._response_has_tool_calls(ctx):
             return
-        if self._explore_count > 0:
+        if self._explore_count == 0:
+            await self._abort_no_edit(ctx)
             return
-        await self._abort_no_edit(ctx)
+        text = self._response_text(ctx)
+        if looks_like_greeting_response(text):
+            await self._abort_no_edit(ctx)
+            return
+        if self._explore_count >= self.explore_budget:
+            await self._abort_no_edit(ctx)
 
 
 __all__ = [

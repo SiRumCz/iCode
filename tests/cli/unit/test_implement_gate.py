@@ -1523,7 +1523,10 @@ def test_chat_only_nudge_and_greeting_detection() -> None:
     assert "NOT claim there is no task" in chat or "was wrong" in chat
 
     explored = zero_mutation_continuation_nudge(task, any_tool_attempted=True)
-    assert explored.startswith(ZERO_MUTATION_NUDGE[:40])
+    from openjiuwen_icode.features.implement_gate import EDIT_ONLY_NUDGE
+
+    assert explored.startswith(EDIT_ONLY_NUDGE[:40])
+    assert "STOP using" in explored
     assert chat != explored
 
     assert (
