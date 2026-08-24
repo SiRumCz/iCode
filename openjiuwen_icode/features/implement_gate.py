@@ -267,6 +267,44 @@ TOOL_RUNTIME_NUDGE = (
     "object into `file_path`. Then continue the original task."
 )
 
+
+def is_fatal_provider_error(exc: BaseException | str) -> bool:
+    """Return True when an LLM/provider error should stop implement continuations.
+
+    Insufficient balance / auth failures will not recover on retry; if the
+    worktree already has deliverable edits, SessionHost should finish instead
+    of burning budget on git-log loops.
+    """
+    text = str(exc or "").lower()
+    if not text:
+        return False
+    markers = (
+        "insufficient balance",
+        "deposit usdc",
+        "authentication",
+        "invalid api key",
+        "incorrect api key",
+        "401",
+        "403 forbidden",
+        "permission denied",
+        "account deactivated",
+        "billing",
+        "quota exceeded",
+        "rate limit",
+    )
+    # Rate limit is often transient — only treat hard billing/auth as fatal.
+    hard = (
+        "insufficient balance",
+        "deposit usdc",
+        "invalid api key",
+        "incorrect api key",
+        "account deactivated",
+        "billing hard limit",
+        "exceeded your current quota",
+    )
+    return any(m in text for m in hard)
+
+
 CHAT_ONLY_NUDGE = (
     "You incorrectly treated the user message as system configuration / "
     "guidelines (or asked what to work on) and did not call any tools. That "
@@ -331,6 +369,11 @@ IMPLEMENT_MODEL_ABORT_CAP = 10
 # Continuation streams after explore-without-edit: at most one more read.
 CONTINUATION_EXPLORE_ABORT_CAP = 1
 CONTINUATION_MODEL_ABORT_CAP = 3
+
+# After a workspace edit, allow a couple of reads then force verify — do not
+# burn the turn on git log / list_files archaeology.
+POST_MUTATION_EXPLORE_ABORT_CAP = 2
+POST_MUTATION_MODEL_ABORT_CAP = 3
 
 # How many headless chat-only (zero-tool) continuations before fail-closed.
 MAX_CHAT_ONLY_CONTINUATIONS = 3
@@ -405,12 +448,25 @@ VERIFY_NUDGE = (
     "`compileall` alone is not enough; "
     "for Rust: `cargo check` or a focused `cargo test`; "
     "for Go: `go test` / `go build` on the packages you touched; "
+    "for TypeScript/JavaScript: `npm test`, `npx jest --runInBand`, or "
+    "`npx vitest run` on the tests for the feature you added — "
+    "`tsc --noEmit` alone is not enough; "
     "for CPython/C: `make -j2` or a targeted object rebuild; "
     "for CPython grammar: `make regen-pegen regen-ast` then "
     "`CCACHE_DISABLE=1 make -j2 python`). "
+    "Do NOT run `git log`, `list_files`, or more archaeology — verify now. "
     "Fix any errors that appear, then continue. If the user required a "
     "submit/deliver command (for example `lolbench-submit`), run it only "
     "after verification succeeds."
+)
+
+POST_MUTATION_EXPLORE_NUDGE = (
+    "You already modified the worktree, then spent more tool rounds on "
+    "`list_files` / `grep` / `read_file` / `git log` instead of verifying. "
+    "STOP exploring. Call `bash` NOW with this repo's real test/build "
+    "command (TypeScript: `npm test` or `npx jest --runInBand` on the "
+    "feature tests; Python: `pytest`; Go: `go test ./... -count=1`). "
+    "Do not summarize git history or ask what to work on."
 )
 
 VERIFY_FAILED_NUDGE = (
@@ -526,6 +582,7 @@ def is_headless_continuation_nudge(text: str) -> bool:
         INTEGRATION_NUDGE,
         VERIFY_NUDGE,
         VERIFY_FAILED_NUDGE,
+        POST_MUTATION_EXPLORE_NUDGE,
         SUBMIT_NUDGE,
         NATIVE_BUILD_NUDGE,
         PYTHON_SUITE_NUDGE,
@@ -1984,6 +2041,9 @@ __all__ = [
     "IMPLEMENT_MODEL_ABORT_CAP",
     "CONTINUATION_EXPLORE_ABORT_CAP",
     "CONTINUATION_MODEL_ABORT_CAP",
+    "POST_MUTATION_EXPLORE_ABORT_CAP",
+    "POST_MUTATION_MODEL_ABORT_CAP",
+    "POST_MUTATION_EXPLORE_NUDGE",
     "GO_SUITE_NUDGE",
     "TS_SUITE_NUDGE",
     "TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE",
@@ -2005,6 +2065,7 @@ __all__ = [
     "zero_mutation_continuation_nudge",
     "ZERO_MUTATION_NUDGE",
     "looks_like_greeting_response",
+    "is_fatal_provider_error",
     "bash_output_indicates_failure",
     "bash_result_succeeded",
     "edit_args_look_shallow",

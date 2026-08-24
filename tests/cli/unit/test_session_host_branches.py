@@ -676,6 +676,140 @@ async def test_zero_tool_streams_cap_even_after_prior_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_mutation_soft_abort_continues_with_verify_nudge() -> None:
+    """Soft-abort after a deliverable edit must continue verify, not TurnFailed."""
+    from openjiuwen.core.session.stream.base import OutputSchema
+
+    from openjiuwen_icode.features.implement_gate import (
+        POST_MUTATION_EXPLORE_NUDGE,
+    )
+
+    bus = EventBus()
+    queries: list[object] = []
+
+    class AbortAfterEdit(DemoBackend):
+        async def run_streaming(
+            self, query: object, session_id: str | None = None
+        ):
+            queries.append(query)
+            if len(queries) == 1:
+                raise asyncio.CancelledError()
+            yield OutputSchema(
+                type="llm_output",
+                index=0,
+                payload={"content": "running tests...\n"},
+            )
+
+    backend = AbortAfterEdit()
+    host = SessionHost(
+        bus, backend, session_id="s1", auto_approve=True
+    )
+    host._mutations = SimpleNamespace(
+        begin_turn=lambda _sid: None,
+        has_deliverable_workspace_changes=lambda: True,
+        workspace=None,
+        record_tool_mutation=lambda *a, **k: None,
+        record_bash_created_path=lambda *a, **k: None,
+        agent_created_test_names=lambda: frozenset(),
+        refresh_after_hashes=lambda: None,
+        end_turn=lambda: None,
+        _current=None,
+    )
+    finished: list[TurnFinished] = []
+    failed: list[TurnFailed] = []
+    done = asyncio.Event()
+
+    async def on_fin(ev: TurnFinished) -> None:
+        finished.append(ev)
+        done.set()
+
+    async def on_fail(ev: TurnFailed) -> None:
+        failed.append(ev)
+        done.set()
+
+    await bus.subscribe(TurnFinished, on_fin)
+    await bus.subscribe(TurnFailed, on_fail)
+    await host.start()
+    await bus.publish(
+        UserMessage(
+            text="Implement link-style in src/rules/link-style.ts",
+            session_id="s1",
+        )
+    )
+    await asyncio.wait_for(done.wait(), timeout=5)
+    await host.stop()
+
+    assert len(queries) >= 2
+    assert any(
+        isinstance(q, str) and POST_MUTATION_EXPLORE_NUDGE[:40] in q
+        for q in queries[1:]
+    )
+    # May still fail closed on verify gate, but must not be "turn cancelled".
+    if failed:
+        assert "turn cancelled" not in failed[-1].error
+
+
+@pytest.mark.asyncio
+async def test_fatal_provider_error_finishes_when_deliverable() -> None:
+    bus = EventBus()
+    queries: list[object] = []
+
+    class FatalBalance(DemoBackend):
+        async def run_streaming(
+            self, query: object, session_id: str | None = None
+        ):
+            queries.append(query)
+            raise RuntimeError(
+                "openAI API async stream error: APIError: "
+                "insufficient balance — deposit USDC to continue"
+            )
+            if False:  # pragma: no cover
+                yield None
+
+    host = SessionHost(
+        bus, FatalBalance(), session_id="s1", auto_approve=True
+    )
+    host._mutations = SimpleNamespace(
+        begin_turn=lambda _sid: None,
+        has_deliverable_workspace_changes=lambda: True,
+        workspace=None,
+        record_tool_mutation=lambda *a, **k: None,
+        record_bash_created_path=lambda *a, **k: None,
+        agent_created_test_names=lambda: frozenset(),
+        refresh_after_hashes=lambda: None,
+        end_turn=lambda: None,
+        _current=None,
+    )
+    finished: list[TurnFinished] = []
+    failed: list[TurnFailed] = []
+    done = asyncio.Event()
+
+    async def on_fin(ev: TurnFinished) -> None:
+        finished.append(ev)
+        done.set()
+
+    async def on_fail(ev: TurnFailed) -> None:
+        failed.append(ev)
+        done.set()
+
+    await bus.subscribe(TurnFinished, on_fin)
+    await bus.subscribe(TurnFailed, on_fail)
+    await host.start()
+    await bus.publish(
+        UserMessage(
+            text="Implement link-style in src/rules/link-style.ts",
+            session_id="s1",
+        )
+    )
+    await asyncio.wait_for(done.wait(), timeout=5)
+    await host.stop()
+
+    assert finished
+    assert not failed
+    assert len(queries) == 1
+
+
+@pytest.mark.asyncio
 async def test_user_interrupt_still_turn_cancelled() -> None:
     """Outer turn-task cancel (UserInterrupt) must keep failing the turn."""
     bus = EventBus()

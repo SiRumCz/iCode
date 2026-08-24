@@ -248,6 +248,8 @@ class MutationTracker:
         for mut in self._current.files:
             if not self._path_under_workspace(mut.path):
                 continue
+            if is_agent_internal_path(mut.path):
+                continue
             if mut.kind == "create" and mut.after_hash:
                 return True
             if mut.after_hash and mut.after_hash != mut.before_hash:
@@ -471,6 +473,17 @@ def path_under_workspace(path: str, workspace: Path | None) -> bool:
     return resolved == ws or ws in resolved.parents
 
 
+def is_agent_internal_path(path: str) -> bool:
+    """Return True for harness bookkeeping paths that must not enter model.patch."""
+    if not path or not str(path).strip():
+        return False
+    try:
+        parts = {p.lower() for p in Path(str(path)).parts}
+    except (OSError, TypeError, ValueError):
+        return ".agent_history" in str(path).replace("\\", "/").lower()
+    return ".agent_history" in parts
+
+
 def _extract_path(tool_args: Any) -> str:
     if isinstance(tool_args, str):
         try:
@@ -560,6 +573,7 @@ __all__ = [
     "TurnMutations",
     "mutation_path_from_args",
     "mutating_tool_applied",
+    "is_agent_internal_path",
     "path_under_workspace",
     "test_paths_from_bash_command",
     "tool_result_payload",

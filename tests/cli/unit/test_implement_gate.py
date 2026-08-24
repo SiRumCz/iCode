@@ -1547,3 +1547,14 @@ def test_chat_only_nudge_and_greeting_detection() -> None:
     resume = chat_only_continuation_nudge(task, any_tool_attempted=True)
     assert resume.startswith(RESUME_AFTER_CHAT_NUDGE[:40])
     assert is_headless_continuation_nudge(RESUME_AFTER_CHAT_NUDGE)
+
+
+def test_fatal_provider_error_detection() -> None:
+    from openjiuwen_icode.features.implement_gate import is_fatal_provider_error
+
+    assert is_fatal_provider_error(
+        "openAI API async stream error: APIError: insufficient balance — deposit USDC"
+    )
+    assert is_fatal_provider_error("Invalid API key provided")
+    assert not is_fatal_provider_error("File name too long")
+    assert not is_fatal_provider_error("connection reset")

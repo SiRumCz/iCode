@@ -14,10 +14,14 @@ from openjiuwen.harness.rails.base import DeepAgentRail
 from openjiuwen_icode.features.implement_gate import (
     CONTINUATION_EXPLORE_ABORT_CAP,
     CONTINUATION_MODEL_ABORT_CAP,
+    POST_MUTATION_EXPLORE_ABORT_CAP,
+    POST_MUTATION_MODEL_ABORT_CAP,
+    bash_result_succeeded,
     extract_bash_command,
     looks_like_explore_bash,
     looks_like_greeting_response,
     looks_like_implement_task,
+    looks_like_verify_command,
     primary_user_task_text,
 )
 from openjiuwen_icode.features.mutations import (
@@ -39,6 +43,7 @@ _EXPLORE_TOOLS = frozenset(
         "todo_list",
         "todo_get",
         "todo_modify",
+        "memory_search",
     }
 )
 
@@ -61,6 +66,20 @@ _NUDGE_CN = (
     "你已连续多轮只做探索（读/搜），尚未调用 `edit_file` / `write_file`。"
     "用户要求修改代码。本轮请停止继续搜索，立刻用 `edit_file` 或 "
     "`write_file` 落一个小而可运行的补丁，而不是继续分析。"
+)
+
+_VERIFY_NUDGE_EN = (
+    "## Verify-now reminder\n"
+    "You already edited the worktree. Stop `git log` / `list_files` / "
+    "more archaeology. Call `bash` with this repo's real tests "
+    "(`npm test` / `npx jest` / `pytest` / `go test`) now."
+)
+
+_VERIFY_NUDGE_CN = (
+    "## 立即验证提醒\n"
+    "你已经改过工作区。停止 `git log` / `list_files` / 继续考古。"
+    "立刻用 `bash` 跑仓库真正的测试（`npm test` / `npx jest` / "
+    "`pytest` / `go test`）。"
 )
 
 _NO_GREETING_EN = (
@@ -116,16 +135,24 @@ def reset_stream_rails(agent: Any) -> None:
         rail.reset_stream_state()
 
 
-def tighten_edit_rails_for_continuation(agent: Any) -> None:
+def tighten_edit_rails_for_continuation(
+    agent: Any,
+    *,
+    verify_only: bool = False,
+) -> None:
     """Use a short explore budget on SessionHost continuation streams.
 
-    After explore-without-edit the agent must patch immediately — at most
-    one more read to locate the write target, then hard-abort.
+    After explore-without-edit the agent must patch immediately. After a
+    workspace mutation without verify, force verify-only (almost no explore).
     """
     for rail in _iter_code_edit_rails(agent):
         rail.explore_budget = 0
-        rail.explore_abort_cap = CONTINUATION_EXPLORE_ABORT_CAP
-        rail.model_abort_cap = CONTINUATION_MODEL_ABORT_CAP
+        if verify_only or rail._workspace_mutated:
+            rail.explore_abort_cap = POST_MUTATION_EXPLORE_ABORT_CAP
+            rail.model_abort_cap = POST_MUTATION_MODEL_ABORT_CAP
+        else:
+            rail.explore_abort_cap = CONTINUATION_EXPLORE_ABORT_CAP
+            rail.model_abort_cap = CONTINUATION_MODEL_ABORT_CAP
         rail.reset_stream_state()
 
 
@@ -140,6 +167,8 @@ class CodeEditNudgeRail(DeepAgentRail):
         *,
         explore_abort_cap: int | None = None,
         model_abort_cap: int | None = None,
+        post_mutation_explore_abort_cap: int | None = None,
+        post_mutation_model_abort_cap: int | None = None,
     ) -> None:
         super().__init__()
         self.explore_budget = max(1, int(explore_budget))
@@ -162,8 +191,25 @@ class CodeEditNudgeRail(DeepAgentRail):
                 self.explore_budget + 1,
                 16,
             )
+        self.post_mutation_explore_abort_cap = max(
+            1,
+            int(
+                post_mutation_explore_abort_cap
+                if post_mutation_explore_abort_cap is not None
+                else POST_MUTATION_EXPLORE_ABORT_CAP
+            ),
+        )
+        self.post_mutation_model_abort_cap = max(
+            1,
+            int(
+                post_mutation_model_abort_cap
+                if post_mutation_model_abort_cap is not None
+                else POST_MUTATION_MODEL_ABORT_CAP
+            ),
+        )
         self._explore_count = 0
         self._workspace_mutated = False
+        self._verify_succeeded = False
         self._model_rounds = 0
         self._aborted_for_explore = False
         self._user_text = ""
@@ -178,6 +224,7 @@ class CodeEditNudgeRail(DeepAgentRail):
         # Reset per agent construction (one turn / session factory).
         self._explore_count = 0
         self._workspace_mutated = False
+        self._verify_succeeded = False
         self._model_rounds = 0
         self._aborted_for_explore = False
         self._user_text = ""
@@ -195,9 +242,21 @@ class CodeEditNudgeRail(DeepAgentRail):
         if text:
             self._user_text = text
 
-    async def _abort_no_edit(self, ctx: AgentCallbackContext) -> None:
-        """Soft-abort explore/chat-only streams so SessionHost can continue."""
-        if self._workspace_mutated or self._aborted_for_explore:
+    def _active_explore_cap(self) -> int:
+        if self._workspace_mutated and not self._verify_succeeded:
+            return min(
+                self.explore_abort_cap, self.post_mutation_explore_abort_cap
+            )
+        return self.explore_abort_cap
+
+    def _active_model_cap(self) -> int:
+        if self._workspace_mutated and not self._verify_succeeded:
+            return min(self.model_abort_cap, self.post_mutation_model_abort_cap)
+        return self.model_abort_cap
+
+    async def _abort_stall(self, ctx: AgentCallbackContext) -> None:
+        """Soft-abort stalled implement streams so SessionHost can continue."""
+        if self._aborted_for_explore or self._verify_succeeded:
             return
         self._ensure_user_text(ctx)
         if not looks_like_implement_task(self._user_text):
@@ -210,16 +269,14 @@ class CodeEditNudgeRail(DeepAgentRail):
         await abort()
 
     async def _maybe_abort_explore_only(self, ctx: AgentCallbackContext) -> None:
+        if self._aborted_for_explore or self._verify_succeeded:
+            return
         if (
-            self._workspace_mutated
-            or self._aborted_for_explore
-            or (
-                self._explore_count < self.explore_abort_cap
-                and self._model_rounds < self.model_abort_cap
-            )
+            self._explore_count < self._active_explore_cap()
+            and self._model_rounds < self._active_model_cap()
         ):
             return
-        await self._abort_no_edit(ctx)
+        await self._abort_stall(ctx)
 
     async def _count_explore(self, ctx: AgentCallbackContext) -> None:
         self._explore_count += 1
@@ -265,7 +322,12 @@ class CodeEditNudgeRail(DeepAgentRail):
                     if ws is not None and path and not path_under_workspace(path, ws):
                         await self._count_explore(ctx)
                         return
+                    # Successful in-workspace edit: start a short post-mutation
+                    # explore budget so git-log loops still soft-abort.
                     self._workspace_mutated = True
+                    self._verify_succeeded = False
+                    self._explore_count = 0
+                    self._aborted_for_explore = False
                     return
                 await self._count_explore(ctx)
             return
@@ -274,6 +336,18 @@ class CodeEditNudgeRail(DeepAgentRail):
             return
         if name == "bash":
             cmd = extract_bash_command(getattr(inputs, "tool_args", None))
+            tool_result = getattr(inputs, "tool_result", None)
+            # Before the first edit, even "verify-looking" bash is explore
+            # (npm test / go test loops without a patch). After mutation,
+            # successful verify clears the stall; failed verify is not explore.
+            if self._workspace_mutated and looks_like_verify_command(cmd):
+                ok = bash_result_succeeded(
+                    tool_result,
+                    tool_success=getattr(inputs, "tool_success", None),
+                )
+                if ok is True:
+                    self._verify_succeeded = True
+                return
             if not self._workspace_mutated or looks_like_explore_bash(cmd):
                 await self._count_explore(ctx)
 
@@ -281,9 +355,9 @@ class CodeEditNudgeRail(DeepAgentRail):
         self._model_rounds += 1
         self._ensure_user_text(ctx)
         if (
-            not self._workspace_mutated
+            not self._verify_succeeded
             and looks_like_implement_task(self._user_text)
-            and self._model_rounds >= self.model_abort_cap
+            and self._model_rounds >= self._active_model_cap()
         ):
             await self._maybe_abort_explore_only(ctx)
 
@@ -306,10 +380,34 @@ class CodeEditNudgeRail(DeepAgentRail):
         if callable(remove):
             remove(_SECTION)
 
-        if self._workspace_mutated or self._explore_count < self.explore_budget:
+        if self._verify_succeeded:
             return
 
         lang = getattr(builder, "language", "en") or "en"
+        if self._workspace_mutated:
+            if self._explore_count < 1:
+                return
+            text = (
+                _VERIFY_NUDGE_CN
+                if str(lang).startswith("zh") or lang == "cn"
+                else _VERIFY_NUDGE_EN
+            )
+            builder.add_section(
+                PromptSection(
+                    name=_SECTION,
+                    content={
+                        "en": _VERIFY_NUDGE_EN,
+                        "cn": _VERIFY_NUDGE_CN,
+                        lang: text,
+                    },
+                    priority=_PRIORITY,
+                )
+            )
+            return
+
+        if self._explore_count < self.explore_budget:
+            return
+
         text = _NUDGE_CN if str(lang).startswith("zh") or lang == "cn" else _NUDGE_EN
         builder.add_section(
             PromptSection(
@@ -353,31 +451,33 @@ class CodeEditNudgeRail(DeepAgentRail):
         return ""
 
     async def after_model_call(self, ctx: AgentCallbackContext) -> None:
-        """Soft-abort implement streams that stall without editing.
+        """Soft-abort implement streams that stall without editing/verifying.
 
         ``after_model_call`` runs *before* tool execution, so we inspect the
         model response for tool_calls rather than post-hoc tool counters.
-
-        - Zero explore + text-only → greeting at task start → abort.
-        - Post-explore text-only (especially greetings) → abort so SessionHost
-          can continue with :data:`EDIT_ONLY_NUDGE`.
         """
         self._ensure_user_text(ctx)
-        if self._workspace_mutated or self._aborted_for_explore:
+        if self._aborted_for_explore or self._verify_succeeded:
             return
         if not looks_like_implement_task(self._user_text):
             return
         if self._response_has_tool_calls(ctx):
             return
-        if self._explore_count == 0:
-            await self._abort_no_edit(ctx)
-            return
+
         text = self._response_text(ctx)
+        if self._workspace_mutated:
+            # Post-edit text-only (git essays / greetings) → force verify continue.
+            await self._abort_stall(ctx)
+            return
+
+        if self._explore_count == 0:
+            await self._abort_stall(ctx)
+            return
         if looks_like_greeting_response(text):
-            await self._abort_no_edit(ctx)
+            await self._abort_stall(ctx)
             return
         if self._explore_count >= self.explore_budget:
-            await self._abort_no_edit(ctx)
+            await self._abort_stall(ctx)
 
 
 __all__ = [

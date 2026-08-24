@@ -72,6 +72,24 @@ def test_has_workspace_changes_ignores_outside_workspace(tmp_path: Path) -> None
     assert tracker.has_workspace_changes() is False
 
 
+def test_has_workspace_changes_ignores_agent_history(tmp_path: Path) -> None:
+    from openjiuwen_icode.features.mutations import is_agent_internal_path
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    hist = ws / ".agent_history" / "file_ops_x.json"
+    hist.parent.mkdir()
+    hist.write_text("{}\n", encoding="utf-8")
+    assert is_agent_internal_path(str(hist))
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("sess-1")
+    tracker.record_tool_mutation("write_file", {"path": str(hist)})
+    hist.write_text('{"a":1}\n', encoding="utf-8")
+    tracker.refresh_after_hashes()
+    assert tracker.has_workspace_changes() is False
+
+
 def test_has_deliverable_workspace_changes_requires_git_dirty(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()

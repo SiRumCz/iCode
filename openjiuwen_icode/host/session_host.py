@@ -304,12 +304,20 @@ class SessionHost:
             from openjiuwen_icode.features.implement_gate import (
                 INCOMPLETE_IMPLEMENT_ERROR,
                 MAX_CHAT_ONLY_CONTINUATIONS,
+                GO_SUITE_NUDGE,
+                NATIVE_BUILD_NUDGE,
+                POST_MUTATION_EXPLORE_NUDGE,
+                PYTHON_SUITE_NUDGE,
+                TS_SUITE_NUDGE,
+                VERIFY_FAILED_NUDGE,
+                VERIFY_NUDGE,
                 WORKTREE_NUDGE,
                 bash_result_succeeded,
                 chat_only_continuation_nudge,
                 edit_args_look_shallow,
                 extract_bash_command,
                 extract_bash_command_from_result,
+                is_fatal_provider_error,
                 looks_like_implement_task,
                 looks_like_native_build_command,
                 looks_like_go_suite_command,
@@ -604,28 +612,61 @@ class SessionHost:
                     if turn is not None and turn.cancelling():
                         raise
                     # CodeEditNudgeRail / DeepAgent.abort soft-stops an
-                    # explore-only stream. Convert that into an empty-worktree
-                    # continuation instead of TurnFailed("turn cancelled"),
-                    # which used to leave DeepSWE with an empty model.patch.
+                    # explore-only (or post-mutation archaeology) stream.
                     if (
                         self._auto_approve
                         and continuation_attempts < max_continuations
                         and looks_like_implement_task(_task_text())
-                        and not _workspace_deliverable()
                     ):
-                        chat_only_stream = _is_zero_tool_stream(stream_saw_tool)
-                        if chat_only_stream and _should_stop_zero_tool_stream(
-                            stream_saw_tool
-                        ):
-                            raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
-                        forced = _empty_worktree_nudge(
-                            stream_saw_tool=stream_saw_tool
+                        if not _workspace_deliverable():
+                            chat_only_stream = _is_zero_tool_stream(
+                                stream_saw_tool
+                            )
+                            if chat_only_stream and _should_stop_zero_tool_stream(
+                                stream_saw_tool
+                            ):
+                                raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+                            forced = _empty_worktree_nudge(
+                                stream_saw_tool=stream_saw_tool
+                            )
+                            if chat_only_stream:
+                                chat_only_continuations += 1
+                            logger.warning(
+                                "implement stream aborted (explore soft-stop); "
+                                "continuing (%s/%s)",
+                                continuation_attempts + 1,
+                                max_continuations,
+                            )
+                            continuation_attempts += 1
+                            query = wrap_implement_continuation_query(
+                                _task_text(), forced
+                            )
+                            continue
+                        # Deliverable but still soft-aborted: force verify.
+                        # Prefer suite-specific gate nudges; otherwise the
+                        # post-mutation explore wording (stop git archaeology).
+                        forced = _continuation_nudge()
+                        suite_nudges = (
+                            TS_SUITE_NUDGE,
+                            GO_SUITE_NUDGE,
+                            PYTHON_SUITE_NUDGE,
+                            NATIVE_BUILD_NUDGE,
+                            VERIFY_FAILED_NUDGE,
+                            VERIFY_NUDGE,
                         )
-                        if chat_only_stream:
-                            chat_only_continuations += 1
+                        if not verify_succeeded and (
+                            forced is None
+                            or not any(
+                                forced == n or forced.startswith(n[:48])
+                                for n in suite_nudges
+                            )
+                        ):
+                            forced = POST_MUTATION_EXPLORE_NUDGE
+                        if forced is None:
+                            forced = VERIFY_NUDGE
                         logger.warning(
-                            "implement stream aborted (explore soft-stop); "
-                            "continuing (%s/%s)",
+                            "implement stream aborted post-mutation; "
+                            "continuing verify (%s/%s)",
                             continuation_attempts + 1,
                             max_continuations,
                         )
@@ -636,6 +677,21 @@ class SessionHost:
                         continue
                     raise
                 except Exception as exc:
+                    # Fatal provider errors (billing/auth) will not recover —
+                    # if the worktree already has a patch, finish the turn so
+                    # eval adapters can commit instead of burning git-log loops.
+                    if (
+                        self._auto_approve
+                        and looks_like_implement_task(_task_text())
+                        and _workspace_deliverable()
+                        and is_fatal_provider_error(exc)
+                    ):
+                        logger.warning(
+                            "fatal provider error with deliverable worktree; "
+                            "finishing turn: %s",
+                            exc,
+                        )
+                        break
                     # Tool/backend crashes (e.g. ENAMETOOLONG from a malformed
                     # write_file path) must not TurnFailed implement tasks
                     # before empty-worktree continuations can recover.

@@ -701,6 +701,25 @@ class LocalBackend:
         continuation_retry = isinstance(query, str) and (
             is_wrapped_implement_continuation_query(query)
         )
+        verify_only_continuation = False
+        if continuation_retry and isinstance(query, str):
+            from openjiuwen_icode.features.implement_gate import (
+                POST_MUTATION_EXPLORE_NUDGE,
+                TS_SUITE_NUDGE,
+                VERIFY_FAILED_NUDGE,
+                VERIFY_NUDGE,
+            )
+
+            head = query.lstrip()
+            verify_only_continuation = any(
+                head.startswith(marker[:48])
+                for marker in (
+                    VERIFY_NUDGE,
+                    VERIFY_FAILED_NUDGE,
+                    POST_MUTATION_EXPLORE_NUDGE,
+                    TS_SUITE_NUDGE,
+                )
+            )
         task_for_stall = (
             original_task_from_query(query) if isinstance(query, str) else ""
         )
@@ -715,7 +734,9 @@ class LocalBackend:
         def _open() -> AsyncIterator[Any]:
             attempt["n"] += 1
             if continuation_retry:
-                tighten_edit_rails_for_continuation(self.agent)
+                tighten_edit_rails_for_continuation(
+                    self.agent, verify_only=verify_only_continuation
+                )
             else:
                 reset_stream_rails(self.agent)
             payload_query: Any = query

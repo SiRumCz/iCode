@@ -244,6 +244,16 @@ def test_tighten_edit_rails_for_continuation() -> None:
     assert rail._explore_count == 0
 
 
+def test_tighten_edit_rails_verify_only_mode() -> None:
+    rail = CodeEditNudgeRail(explore_budget=3, explore_abort_cap=12)
+    agent = MagicMock()
+    agent.rails = [rail]
+    tighten_edit_rails_for_continuation(agent, verify_only=True)
+    assert rail.explore_budget == 0
+    assert rail.explore_abort_cap == 2
+    assert rail.model_abort_cap == 3
+
+
 def test_default_explore_abort_cap_allows_orientation() -> None:
     rail = CodeEditNudgeRail()
     assert rail.explore_budget == 8
@@ -420,3 +430,107 @@ async def test_explore_abort_cap_triggers_soft_abort() -> None:
         )
     agent.abort.assert_called_once()
     assert rail._aborted_for_explore is True
+
+
+@pytest.mark.asyncio
+async def test_post_mutation_git_log_still_soft_aborts() -> None:
+    """After an edit, git archaeology must still hit the explore abort cap."""
+    rail = CodeEditNudgeRail(
+        explore_budget=6,
+        explore_abort_cap=8,
+        post_mutation_explore_abort_cap=2,
+    )
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    agent.cfg = SimpleNamespace(cwd="/app")
+    rail.init(agent)
+    rail._user_text = "Implement link-style in src/rules/link-style.ts"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "openjiuwen_icode.rails.code_edit_nudge._agent_workspace",
+            lambda _agent: __import__("pathlib").Path("/app"),
+        )
+        await rail.after_tool_call(
+            SimpleNamespace(
+                inputs=SimpleNamespace(
+                    tool_name="write_file",
+                    tool_args={"file_path": "/app/src/rules/link-style.ts"},
+                    tool_result=SimpleNamespace(
+                        success=True,
+                        content="created",
+                    ),
+                )
+            )
+        )
+        assert rail._workspace_mutated is True
+        for _ in range(2):
+            await rail.after_tool_call(
+                SimpleNamespace(
+                    inputs=SimpleNamespace(
+                        tool_name="bash",
+                        tool_args={
+                            "command": "cd /app && git log --oneline -5"
+                        },
+                    )
+                )
+            )
+    agent.abort.assert_called_once()
+    assert rail._aborted_for_explore is True
+
+
+@pytest.mark.asyncio
+async def test_after_model_call_aborts_text_only_after_mutation() -> None:
+    rail = CodeEditNudgeRail(explore_budget=6, explore_abort_cap=8)
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail._user_text = "Implement link-style in src/rules/link-style.ts"
+    rail._workspace_mutated = True
+    ctx = SimpleNamespace(
+        inputs=SimpleNamespace(
+            response=SimpleNamespace(
+                tool_calls=None,
+                content="Here are the last 5 commits...",
+            ),
+            messages=[],
+        )
+    )
+    await rail.after_model_call(ctx)
+    agent.abort.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_verify_bash_disables_post_mutation_abort() -> None:
+    rail = CodeEditNudgeRail(
+        explore_budget=6,
+        explore_abort_cap=8,
+        post_mutation_explore_abort_cap=2,
+    )
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail._user_text = "Implement link-style in src/rules/link-style.ts"
+    rail._workspace_mutated = True
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "npm test -- --runInBand"},
+                tool_result={
+                    "content": "Tests: 10 passed\nExit Code: 0"
+                },
+                tool_success=True,
+            )
+        )
+    )
+    assert rail._verify_succeeded is True
+    for _ in range(5):
+        await rail.after_tool_call(
+            SimpleNamespace(
+                inputs=SimpleNamespace(
+                    tool_name="bash",
+                    tool_args={"command": "git log --oneline -5"},
+                )
+            )
+        )
+    agent.abort.assert_not_called()
