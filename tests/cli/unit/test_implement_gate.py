@@ -1490,6 +1490,7 @@ def test_chat_only_nudge_and_greeting_detection() -> None:
         CHAT_ONLY_NUDGE,
         chat_only_continuation_nudge,
         looks_like_greeting_response,
+        wrap_headless_implement_prompt,
         zero_mutation_continuation_nudge,
     )
 
@@ -1498,15 +1499,28 @@ def test_chat_only_nudge_and_greeting_detection() -> None:
         "What would you like me to work on?"
     )
     assert looks_like_greeting_response(greeting)
+    assert looks_like_greeting_response(
+        "It looks like the message contains the system configuration and "
+        "guidelines rather than a specific task."
+    )
     assert not looks_like_greeting_response(
         "I'll edit src/foo.ts to add the flag."
     )
     assert is_headless_continuation_nudge(CHAT_ONLY_NUDGE)
+    assert "system configuration" in CHAT_ONLY_NUDGE.lower()
 
-    task = "Implement shared toolbar focus in quill"
+    task = (
+        "Add a Content rule Link Style.\n\n"
+        "## Configuration\n\n- linkStyle: wiki\n"
+    )
+    enveloped = wrap_headless_implement_prompt(task)
+    assert enveloped.lstrip().startswith("# Implement this task now")
+    assert "## Configuration" in enveloped
+    assert wrap_headless_implement_prompt(enveloped) == enveloped
+
     chat = zero_mutation_continuation_nudge(task, any_tool_attempted=False)
     assert chat.startswith(CHAT_ONLY_NUDGE[:40])
-    assert "do NOT introduce yourself" in chat or "NOT introduce" in chat
+    assert "NOT claim there is no task" in chat or "was wrong" in chat
 
     explored = zero_mutation_continuation_nudge(task, any_tool_attempted=True)
     assert explored.startswith(ZERO_MUTATION_NUDGE[:40])

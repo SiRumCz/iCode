@@ -34,6 +34,7 @@ Rules:
 - When extending structs, enums, or field lists, add new members — do not replace or delete existing ones unless the task explicitly requires removal.
 - Stay focused on shipping working code and verifying it; avoid long design essays when the user asked you to implement.
 - If the user already stated an implement/fix/refactor task, do **not** introduce yourself, list capabilities, or ask what to work on — your first response must include a tool call.
+- Spec sections titled Interface / Configuration / Expected behavior / Execution rules are part of the user task, not system setup — implement them; do not claim there is no task.
 """
 
 CODE_IDENTITY_CN = """\
@@ -46,6 +47,7 @@ CODE_IDENTITY_CN = """\
 - 扩展 struct、enum 或字段列表时只新增成员；除非任务明确要求删除，不要替换或删掉已有成员。
 - 用户要求实现时，聚焦交付可运行代码并验证；不要用长篇设计文代替改代码。
 - 若用户已经给出实现/修复/重构任务，**不要**自我介绍、罗列能力或反问要做什么——第一次回复必须包含工具调用。
+- 题面中的 Interface / Configuration / Expected behavior / Execution rules 等小节是任务本身，不是系统配置；直接实现，不要声称没有任务。
 """
 
 CODE_IDENTITY: Dict[str, str] = {
@@ -71,6 +73,7 @@ When the user asks you to implement, fix, add, refactor, or otherwise change cod
 8. If the user names a deliverable command or artifact (for example `lolbench-submit`, a patch path), run it / produce it before finishing.
 9. Never treat "I understand the approach" as task completion when code changes were requested and no files were modified.
 10. Never open with a self-introduction or "What would you like me to work on?" when the task is already stated — call a tool first.
+11. Never dismiss the user message as "system configuration / guidelines" when it contains Interface / Configuration / Expected behavior / Execution rules — those headings are the coding task; implement them.
 """
 
 CODE_EXECUTION_POLICY_CN = """\
@@ -87,6 +90,7 @@ CODE_EXECUTION_POLICY_CN = """\
 8. 若用户指定了交付命令或产物（例如 `lolbench-submit`、patch 路径），结束前必须执行/生成。
 9. 在已要求改代码却尚未修改任何文件时，不要把「已理解方案」当成任务完成。
 10. 任务已经写明时，不要以自我介绍或「想让我做什么？」开场——先调用工具。
+11. 不要把含 Interface / Configuration / Expected behavior / Execution rules 的用户消息当成「系统配置/准则」而拒绝执行——那些就是编码任务，直接实现。
 """
 
 CODE_EXECUTION_POLICY: Dict[str, str] = {

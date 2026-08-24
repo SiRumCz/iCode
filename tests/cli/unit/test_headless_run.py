@@ -40,6 +40,34 @@ def test_resolve_prompt_exclusive() -> None:
         resolve_prompt(prompt=None, task=None)
 
 
+def test_resolve_prompt_envelopes_implement_task_file(tmp_path: Path) -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        HEADLESS_TASK_ENVELOPE_MARKER,
+    )
+
+    f = tmp_path / "deepswe_task.md"
+    body = (
+        "Add a **Content** rule **Link Style** (alias: `link-style`).\n\n"
+        "## Configuration\n\n"
+        "- `linkStyle`: `markdown` | `wiki`\n\n"
+        "---\n"
+        "Execution rules for this DeepSWE eval:\n"
+        "1. The repository under evaluation is `/app`.\n"
+    )
+    f.write_text(body, encoding="utf-8")
+    text = resolve_prompt(prompt=None, task=str(f))
+    assert text.lstrip().startswith(HEADLESS_TASK_ENVELOPE_MARKER)
+    assert "## Configuration" in text
+    assert "Execution rules for this DeepSWE eval" in text
+    # Idempotent.
+    assert resolve_prompt(prompt=text, task=None) == text
+
+
+def test_resolve_prompt_skips_envelope_for_non_implement() -> None:
+    text = resolve_prompt(prompt="What is 2+2?", task=None)
+    assert text == "What is 2+2?"
+
+
 def test_apply_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     nested = tmp_path / "ws"

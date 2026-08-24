@@ -268,12 +268,30 @@ TOOL_RUNTIME_NUDGE = (
 )
 
 CHAT_ONLY_NUDGE = (
-    "You replied with an introduction or asked what to work on, but did not "
-    "call any tools. The implement task is already in the user message — do "
-    "NOT introduce yourself, list your capabilities, or ask what to work on. "
-    "Immediately call `list_files`, `grep`, or `read_file` under the repo "
-    "cwd, then `edit_file` / `write_file` to apply a concrete patch. Your "
-    "next response must include a tool call."
+    "You incorrectly treated the user message as system configuration / "
+    "guidelines (or asked what to work on) and did not call any tools. That "
+    "was wrong: the user message IS the implement task — including any "
+    "Interface / Configuration / Expected behavior / Execution rules "
+    "sections. Do NOT claim there is no task, introduce yourself, or ask "
+    "what to work on. Immediately call `list_files`, `grep`, or "
+    "`read_file` under the repo cwd, then `edit_file` / `write_file` to "
+    "apply a concrete patch. Your next response must include a tool call."
+)
+
+# Prefixed onto headless ``icode run -t`` / implement prompts so weak models
+# do not confuse task specs (e.g. "## Configuration") with system setup.
+HEADLESS_TASK_ENVELOPE_MARKER = "# Implement this task now"
+
+_HEADLESS_TASK_ENVELOPE = (
+    f"{HEADLESS_TASK_ENVELOPE_MARKER}\n"
+    "The block below is your ONLY user task for this headless run. Execute "
+    "it with tools in the repo cwd.\n"
+    "Do NOT treat it as system configuration, identity guidelines, or an "
+    "empty prompt. Headings like Interface / Configuration / Expected "
+    "behavior / Execution rules are PART OF THE TASK SPEC.\n"
+    "Do NOT ask what to work on — your first response must include a tool "
+    "call (`list_files` / `grep` / `read_file` / `edit_file` / "
+    "`write_file`)."
 )
 
 ZERO_MUTATION_NUDGE = (
@@ -303,6 +321,16 @@ _GREETING_MARKERS = (
     "just let me know the task",
     "just describe the task",
     "just tell me what you'd like",
+    "system configuration and guidelines",
+    "system/configuration instructions",
+    "rather than a specific task",
+    "rather than an actual task",
+    "rather than a concrete request",
+    "don't see a specific task",
+    "i don't see a specific task",
+    "i don't see a concrete request",
+    "contains only system",
+    "contains the system configuration",
 )
 
 WORKTREE_NUDGE = (
@@ -493,14 +521,43 @@ def looks_like_greeting_response(text: str) -> bool:
     if hits >= 2:
         return True
     if hits >= 1 and len(stripped) < 2500:
-        # Single strong ask-what-to-do marker is enough for short intros.
-        ask_markers = (
+        # Single strong ask-what-to-do / no-task-misread marker is enough.
+        strong_markers = (
             "what would you like me to work on",
             "what would you like me to help",
             "what would you like to work on",
+            "system configuration and guidelines",
+            "rather than a specific task",
+            "rather than an actual task",
+            "i don't see a specific task",
+            "don't see a specific task",
         )
-        return any(m in stripped for m in ask_markers)
+        return any(m in stripped for m in strong_markers)
     return False
+
+
+def is_headless_task_enveloped(text: str) -> bool:
+    """Return True when *text* already has the headless implement envelope."""
+    return (text or "").lstrip().startswith(HEADLESS_TASK_ENVELOPE_MARKER)
+
+
+def wrap_headless_implement_prompt(text: str) -> str:
+    """Prefix implement-looking headless prompts with an unambiguous task envelope.
+
+    Weak models often misread DeepSWE / Pier specs that contain
+    ``## Configuration`` or trailing ``Execution rules`` as system setup and
+    reply with greetings. The envelope forces ``-t`` content to be treated as
+    the sole coding task.
+    """
+    raw = text or ""
+    if not raw.strip():
+        return raw.strip()
+    if is_headless_task_enveloped(raw):
+        return raw
+    body = raw.strip()
+    if not looks_like_implement_task(body):
+        return body
+    return f"{_HEADLESS_TASK_ENVELOPE}\n\n---\n{body}\n"
 
 
 def is_wrapped_implement_continuation_query(text: str) -> bool:
@@ -1881,6 +1938,9 @@ __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
     "CHAT_ONLY_NUDGE",
     "MAX_CHAT_ONLY_CONTINUATIONS",
+    "HEADLESS_TASK_ENVELOPE_MARKER",
+    "is_headless_task_enveloped",
+    "wrap_headless_implement_prompt",
     "GO_SUITE_NUDGE",
     "TS_SUITE_NUDGE",
     "TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE",

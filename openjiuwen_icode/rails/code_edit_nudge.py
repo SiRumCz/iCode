@@ -62,15 +62,19 @@ _NUDGE_CN = (
 
 _NO_GREETING_EN = (
     "## Do not greet on implement tasks\n"
-    "The user already gave a concrete coding task. Do NOT introduce "
-    "yourself, list your capabilities, or ask what to work on. Your "
-    "first action must be a tool call (`list_files` / `grep` / "
-    "`read_file` / `edit_file` / `write_file`)."
+    "The user already gave a concrete coding task (including any Interface / "
+    "Configuration / Expected behavior / Execution rules sections). Those "
+    "sections are part of the task — not system setup. Do NOT claim the "
+    "message is only guidelines, introduce yourself, list capabilities, or "
+    "ask what to work on. Your first action must be a tool call "
+    "(`list_files` / `grep` / `read_file` / `edit_file` / `write_file`)."
 )
 
 _NO_GREETING_CN = (
     "## 实现任务禁止寒暄\n"
-    "用户已经给出具体编码任务。不要自我介绍、罗列能力，或反问要做什么。"
+    "用户已经给出具体编码任务（含 Interface / Configuration / Expected "
+    "behavior / Execution rules 等小节）。这些是题面的一部分，不是系统配置。"
+    "不要声称消息只是 guidelines、不要自我介绍/罗列能力，或反问要做什么。"
     "第一步必须调用工具（`list_files` / `grep` / `read_file` / "
     "`edit_file` / `write_file`）。"
 )
