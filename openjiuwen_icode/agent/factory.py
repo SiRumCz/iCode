@@ -452,12 +452,31 @@ def create_agent(
     Returns:
         ``(agent, tracker)`` tuple.
     """
+    from openjiuwen_icode.agent.reasoning import (
+        merge_request_kwargs,
+        preferred_provider_for_api_base,
+    )
+
+    provider = cfg.provider
+    preferred = preferred_provider_for_api_base(
+        cfg.api_base, current=provider
+    )
+    if preferred:
+        provider = preferred
+
+    request_kwargs = merge_request_kwargs(
+        api_base=cfg.api_base,
+        reasoning_effort=getattr(cfg, "reasoning_effort", None),
+        extra_body=getattr(cfg, "extra_body", None) or None,
+        extra_headers=getattr(cfg, "extra_headers", None) or None,
+    )
     model = init_model(
-        provider=cfg.provider,
+        provider=provider,
         model_name=cfg.model,
         api_key=cfg.api_key,
         api_base=cfg.api_base,
         max_tokens=cfg.max_tokens,
+        **request_kwargs,
     )
 
     from openjiuwen_icode.agent.profile_loader import (

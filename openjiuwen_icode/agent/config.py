@@ -92,6 +92,8 @@ class CLIConfig:
         api_base: Provider API base URL.
         max_iterations: Maximum ReAct + TaskLoop iterations.
         max_tokens: Maximum tokens per model call.
+        reasoning_effort: Semantic thinking effort
+            (``none``/``low``/``medium``/``high``/``max``); mapped per API base.
         server_url: Remote agent-server URL; empty means local mode.
         cwd: Working directory (filled at runtime; usually primary directory).
         workspace: Agent workspace directory (``<icode-project>/workspace``).
@@ -105,6 +107,8 @@ class CLIConfig:
     api_base: str = "https://api.openai.com/v1"
     extra_headers: dict = field(default_factory=dict)
     extra_body: dict = field(default_factory=dict)
+    #: Semantic effort: none/low/medium/high/max; None = gateway default.
+    reasoning_effort: Optional[str] = None
     max_iterations: int = 30
     max_tokens: int = 8192
     server_url: str = ""
@@ -137,6 +141,12 @@ class CLIConfig:
             raise ValueError(
                 f"max_iterations={self.max_iterations} must be >= 1."
             )
+        if self.reasoning_effort:
+            from openjiuwen_icode.agent.reasoning import (
+                normalize_reasoning_effort,
+            )
+
+            normalize_reasoning_effort(self.reasoning_effort)
 
 
 def load_config(
@@ -204,6 +214,29 @@ def load_config(
         else requested_iterations
     )
 
+    def _as_dict(value: Any) -> dict:
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        return {}
+
+    headers = _as_dict(
+        settings.get("headers") or settings.get("extra_headers")
+    )
+    body = _as_dict(
+        settings.get("extra_body") or settings.get("extraBody")
+    )
+    effort_raw = (
+        _env("ICODE_REASONING_EFFORT", "OPENJIUWEN_REASONING_EFFORT")
+        or settings.get("reasoningEffort")
+        or settings.get("reasoning_effort")
+    )
+
     cfg = CLIConfig(
         provider=(
             provider
@@ -219,7 +252,11 @@ def load_config(
         ),
         api_key=(
             api_key
-            or _env("ICODE_API_KEY", "OPENJIUWEN_API_KEY")
+            or _env(
+                "ICODE_API_KEY",
+                "OPENJIUWEN_API_KEY",
+                "DEEPSEEK_API_KEY",
+            )
             or settings.get("apiKey")
             or ""
         ),
@@ -228,6 +265,11 @@ def load_config(
             or _env("ICODE_API_BASE", "OPENJIUWEN_API_BASE")
             or settings.get("apiBase")
             or "https://api.openai.com/v1"
+        ),
+        extra_headers=headers,
+        extra_body=body,
+        reasoning_effort=(
+            str(effort_raw).strip() if effort_raw else None
         ),
         max_iterations=effective_iterations,
         max_tokens=int(
