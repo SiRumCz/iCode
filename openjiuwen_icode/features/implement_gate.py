@@ -556,8 +556,8 @@ TS_SUITE_NUDGE = (
     "`tsc --noEmit`, `npm run build`, or typecheck-only commands are not "
     "enough. Do not treat test files you wrote this session as sufficient "
     "verification — run the project's real integration tests via `bash` "
-    "(Effect monorepos: `npx vitest run --project @effect/platform-node "
-    "test/<Feature>.test.ts`; Deno repos: `deno task test`; Node repos: "
+    "(Effect monorepos: `npx vitest run --project @effect/platform-node`; "
+    "Deno repos: `deno task test`; Node repos: "
     "`npm test` or `npx vitest run`) without piping through `tail`/`grep`, "
     "fix failures, and re-run until they pass before finishing."
 )
@@ -568,8 +568,9 @@ TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE = (
     "re-run the same command, make empty touch commits, or tweak comments "
     "to \"force a diff\". Instead: (1) run the repo's canonical or "
     "consumer-package suite without piping through `head`/`tail`/`grep` "
-    "(for example bare `npx vitest run --project @effect/platform-node "
-    "test/HttpApiSSE.test.ts`, `npm test`, or `pnpm exec vitest run`); "
+    "(for example bare `npx vitest run --project @effect/platform-node`, "
+    "`npm test`, or `pnpm exec vitest run`); a targeted test file created "
+    "during this turn cannot qualify as the final verification; "
     "(2) ensure chainable methods the user named are wired on real runtime "
     "entrypoints, not only in isolated helper unit tests; (3) fix any "
     "failures and re-run verification."
@@ -1082,6 +1083,24 @@ def is_full_typescript_suite_command(command: str) -> bool:
             return True
         if re.fullmatch(r"(?:npx\s+)?jest", lower):
             return True
+    if re.search(
+        r"\b(?:(?:npx|pnpm\s+exec|yarn\s+exec)\s+)?vitest(?:\s+run)?\b",
+        lower,
+    ):
+        if not re.search(r"(?:^|\s)--project(?:=|\s)", lower):
+            return False
+        if re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)\b", lower):
+            return False
+        if re.search(r"_(?:test|spec)\.(?:ts|tsx|js|jsx)\b", lower):
+            return False
+        if re.search(
+            r"(?:^|\s)(?:-t|--testnamepattern|--related)(?:=|\s)",
+            lower,
+        ):
+            return False
+        # A project selector still runs that project's canonical suite. This
+        # is the broad fallback when the feature test was authored this turn.
+        return True
     if looks_like_deno_test_command(command):
         # Project tasks (``deno task test``, ``test:deno-v2``, …) run the
         # repo's canonical suite from ``deno.json``.
@@ -1211,14 +1230,7 @@ def verify_command_qualifies_for_completion(
         if verify_command_targets_agent_authored_tests(
             command, agent_created_test_names
         ):
-            targets = suggested_typescript_verify_targets(user_text)
-            if targets:
-                if not typescript_monorepo_integration_verify_matches(
-                    user_text, command
-                ):
-                    return False
-            else:
-                return False
+            return False
         if user_text and not typescript_command_matches_task_scope(
             user_text, command
         ):
@@ -2282,10 +2294,11 @@ def typescript_insufficient_verify_nudge(user_text: str) -> str:
     extras: list[str] = []
     for target in suggested_typescript_verify_targets(user_text):
         extras.append(
-            "Run consumer-package tests: "
-            f"`npx vitest run --project {target['project']} "
-            f"{target.get('test_path', target.get('test_file', ''))}` "
-            "without piping through `tail`/`grep`."
+            "Run the full consumer-package suite: "
+            f"`npx vitest run --project {target['project']}` without piping "
+            "through `tail`/`grep`. If that is infeasible, target "
+            "pre-existing neighboring integration tests, not a test file "
+            "created during this turn."
         )
     methods = extract_chainable_method_names(user_text)[:6]
     if methods:

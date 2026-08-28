@@ -1743,8 +1743,9 @@ def test_vitest_piped_command_counts_as_verify() -> None:
     )
 
 
-def test_effect_sse_requires_platform_node_not_platform_only() -> None:
+def test_effect_sse_rejects_agent_test_and_accepts_consumer_suite() -> None:
     from openjiuwen_icode.features.implement_gate import (
+        is_full_typescript_suite_command,
         post_verify_contract_pending_items,
         typescript_monorepo_integration_verify_matches,
         typescript_wrong_package_only,
@@ -1752,14 +1753,24 @@ def test_effect_sse_requires_platform_node_not_platform_only() -> None:
     )
 
     wrong = "npx vitest run --project @effect/platform test/HttpApiSSE.test.ts"
-    right = "npx vitest run --project @effect/platform-node test/HttpApiSSE.test.ts"
+    agent_only = (
+        "npx vitest run --project @effect/platform-node test/HttpApiSSE.test.ts"
+    )
+    consumer_suite = "npx vitest run --project @effect/platform-node"
     agent_tests = frozenset({"HttpApiSSE.test.ts", "httpapisse.test.ts"})
 
     assert typescript_wrong_package_only(wrong, EFFECT_SSE_TASK)
     assert not typescript_monorepo_integration_verify_matches(
         EFFECT_SSE_TASK, wrong
     )
-    assert typescript_monorepo_integration_verify_matches(EFFECT_SSE_TASK, right)
+    assert typescript_monorepo_integration_verify_matches(
+        EFFECT_SSE_TASK, agent_only
+    )
+    assert typescript_monorepo_integration_verify_matches(
+        EFFECT_SSE_TASK, consumer_suite
+    )
+    assert not is_full_typescript_suite_command(agent_only)
+    assert is_full_typescript_suite_command(consumer_suite)
     assert not verify_command_qualifies_for_completion(
         wrong,
         native_mutated=False,
@@ -1768,8 +1779,16 @@ def test_effect_sse_requires_platform_node_not_platform_only() -> None:
         user_text=EFFECT_SSE_TASK,
         agent_created_test_names=agent_tests,
     )
+    assert not verify_command_qualifies_for_completion(
+        agent_only,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=EFFECT_SSE_TASK,
+        agent_created_test_names=agent_tests,
+    )
     assert verify_command_qualifies_for_completion(
-        right,
+        consumer_suite,
         native_mutated=False,
         typescript_mutated=True,
         success=True,
@@ -1778,7 +1797,10 @@ def test_effect_sse_requires_platform_node_not_platform_only() -> None:
     )
     pending = post_verify_contract_pending_items(EFFECT_SSE_TASK, (wrong,))
     assert any("platform-node" in line for line in pending)
-    assert post_verify_contract_pending_items(EFFECT_SSE_TASK, (right,)) == ()
+    assert (
+        post_verify_contract_pending_items(EFFECT_SSE_TASK, (consumer_suite,))
+        == ()
+    )
 
 
 def test_wire_format_contract_pending_for_effect_sse() -> None:
