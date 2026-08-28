@@ -292,6 +292,9 @@ class SessionHost:
         typescript_suite_passed_unqualified = False
         mutation_blob_parts: list[str] = []
         pending_mutation_args: dict[str, Any] = {}
+        bash_commands: list[str] = []
+        suite_verify_without_mutation = 0
+        mutated_since_qualifying_verify = True
         continuation_attempts = 0
         chat_only_continuations = 0
         any_tool_attempted = False
@@ -314,6 +317,9 @@ class SessionHost:
                 WORKTREE_NUDGE,
                 bash_result_succeeded,
                 chat_only_continuation_nudge,
+                cli_contract_nudge,
+                cli_contract_satisfied,
+                cli_flag_dense_task,
                 edit_args_look_shallow,
                 extract_bash_command,
                 extract_bash_command_from_result,
@@ -396,6 +402,8 @@ class SessionHost:
                         typescript_suite_passed_unqualified
                     ),
                     any_tool_attempted=any_tool_attempted,
+                    bash_commands=tuple(bash_commands),
+                    suite_verify_without_mutation=suite_verify_without_mutation,
                 )
 
             def _empty_worktree_nudge(*, stream_saw_tool: bool) -> str:
@@ -456,6 +464,8 @@ class SessionHost:
                                     cmd = extract_bash_command(
                                         ev.tool_args
                                     )
+                                    if cmd:
+                                        bash_commands.append(cmd)
                                     if looks_like_verify_command(cmd):
                                         verify_attempted = True
                                     if looks_like_submit_command(cmd):
@@ -495,6 +505,9 @@ class SessionHost:
                                             continue
                                         mutate_attempted = True
                                         verify_succeeded = False
+                                        bash_commands = []
+                                        suite_verify_without_mutation = 0
+                                        mutated_since_qualifying_verify = True
                                         if args is not None:
                                             if mutation_args_touch_native(args):
                                                 native_mutated = True
@@ -524,6 +537,8 @@ class SessionHost:
                                     cmd = extract_bash_command_from_result(
                                         ev.result
                                     )
+                                    if cmd and cmd not in bash_commands:
+                                        bash_commands.append(cmd)
                                     if looks_like_verify_command(cmd):
                                         verify_attempted = True
                                         ok = bash_result_succeeded(
@@ -568,6 +583,11 @@ class SessionHost:
                                                 ):
                                                     typescript_suite_verified = True
                                                 verify_succeeded = True
+                                                if mutated_since_qualifying_verify:
+                                                    suite_verify_without_mutation = 1
+                                                    mutated_since_qualifying_verify = False
+                                                else:
+                                                    suite_verify_without_mutation += 1
                                             else:
                                                 verify_succeeded = False
                                                 if looks_like_typescript_suite_command(
@@ -642,9 +662,8 @@ class SessionHost:
                                 _task_text(), forced
                             )
                             continue
-                        # Deliverable but still soft-aborted: force verify.
-                        # Prefer suite-specific gate nudges; otherwise the
-                        # post-mutation explore wording (stop git archaeology).
+                        # Deliverable but still soft-aborted: force verify or
+                        # CLI contract checks — not another full-suite loop.
                         forced = _continuation_nudge()
                         suite_nudges = (
                             TS_SUITE_NUDGE,
@@ -654,6 +673,21 @@ class SessionHost:
                             VERIFY_FAILED_NUDGE,
                             VERIFY_NUDGE,
                         )
+                        task_text = _task_text()
+                        if verify_succeeded:
+                            if cli_flag_dense_task(
+                                task_text
+                            ) and not cli_contract_satisfied(
+                                task_text, tuple(bash_commands)
+                            ):
+                                forced = cli_contract_nudge(
+                                    task_text, tuple(bash_commands)
+                                )
+                            elif forced is not None and any(
+                                forced == n or forced.startswith(n[:48])
+                                for n in suite_nudges
+                            ):
+                                forced = None
                         if not verify_succeeded and (
                             forced is None
                             or not any(
@@ -662,8 +696,14 @@ class SessionHost:
                             )
                         ):
                             forced = POST_MUTATION_EXPLORE_NUDGE
-                        if forced is None:
+                        if forced is None and not verify_succeeded:
                             forced = VERIFY_NUDGE
+                        if forced is None and verify_succeeded:
+                            logger.info(
+                                "soft-stop with verify+CLI contract satisfied; "
+                                "finishing turn"
+                            )
+                            break
                         logger.warning(
                             "implement stream aborted post-mutation; "
                             "continuing verify (%s/%s)",

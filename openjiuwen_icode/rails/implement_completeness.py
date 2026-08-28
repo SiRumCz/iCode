@@ -14,6 +14,9 @@ from openjiuwen.harness.rails.base import DeepAgentRail
 
 from openjiuwen_icode.features.implement_gate import (
     bash_result_succeeded,
+    cli_contract_nudge,
+    cli_contract_satisfied,
+    cli_flag_dense_task,
     edit_args_look_shallow,
     extract_bash_command,
     extract_bash_command_from_result,
@@ -171,6 +174,19 @@ _VERIFY_FAILED_CN = (
     "最近一次编译/测试命令失败。请先修复错误并重新验证，再执行提交命令。"
 )
 
+_CLI_CONTRACT_EN = (
+    "## CLI contract checklist\n"
+    "The test suite may pass while hidden eval checks still fail on CLI "
+    "output contracts. Run targeted live CLI smokes via `bash` (not another "
+    "full suite loop) before finishing."
+)
+
+_CLI_CONTRACT_CN = (
+    "## CLI 契约清单\n"
+    "全量测试可能已通过，但隐藏评测仍会检查 CLI 输出契约。"
+    "结束前请用 `bash` 做针对性 live CLI smoke，不要再次全量跑 suite。"
+)
+
 
 def _agent_workspace(agent: Any) -> Path | None:
     if agent is None:
@@ -207,6 +223,7 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
+        self._bash_commands: list[str] = []
         self._user_text = ""
         self.system_prompt_builder = None
         self._agent: Any = None
@@ -231,6 +248,7 @@ class ImplementCompletenessRail(DeepAgentRail):
         self._verify_attempted = False
         self._verify_succeeded = False
         self._submit_attempted = False
+        self._bash_commands: list[str] = []
         self._user_text = ""
 
     async def after_tool_call(self, ctx: AgentCallbackContext) -> None:
@@ -256,6 +274,7 @@ class ImplementCompletenessRail(DeepAgentRail):
                 return
             self._mutated = True
             self._verify_succeeded = False
+            self._bash_commands = []
             if mutation_args_touch_native(args):
                 self._native_mutated = True
                 self._native_build_verified = False
@@ -308,6 +327,8 @@ class ImplementCompletenessRail(DeepAgentRail):
             return
         if name == "bash":
             cmd = extract_bash_command(args)
+            if cmd:
+                self._bash_commands.append(cmd)
             if looks_like_verify_command(cmd):
                 self._verify_attempted = True
             if looks_like_submit_command(cmd):
@@ -316,6 +337,8 @@ class ImplementCompletenessRail(DeepAgentRail):
                 result_cmd = cmd or extract_bash_command_from_result(
                     tool_result
                 )
+                if result_cmd and result_cmd not in self._bash_commands:
+                    self._bash_commands.append(result_cmd)
                 if looks_like_verify_command(result_cmd):
                     self._verify_attempted = True
                     ok = bash_result_succeeded(
@@ -369,6 +392,10 @@ class ImplementCompletenessRail(DeepAgentRail):
 
         if not self._mutated:
             return
+        cli_ok = (
+            not cli_flag_dense_task(self._user_text)
+            or cli_contract_satisfied(self._user_text, self._bash_commands)
+        )
         if (
             self._verify_succeeded
             and not self._shallow_only
@@ -389,6 +416,7 @@ class ImplementCompletenessRail(DeepAgentRail):
                 or self._native_mutated
                 or self._typescript_suite_verified
             )
+            and cli_ok
         ):
             return
 
@@ -449,6 +477,20 @@ class ImplementCompletenessRail(DeepAgentRail):
             content = {
                 "en": _VERIFY_FAILED_EN,
                 "cn": _VERIFY_FAILED_CN,
+                lang: text,
+            }
+        elif (
+            self._verify_succeeded
+            and cli_flag_dense_task(self._user_text)
+            and not cli_contract_satisfied(self._user_text, self._bash_commands)
+        ):
+            detail = cli_contract_nudge(self._user_text, self._bash_commands)
+            text = (
+                f"{_CLI_CONTRACT_CN if zh else _CLI_CONTRACT_EN}\n\n{detail}"
+            )
+            content = {
+                "en": f"{_CLI_CONTRACT_EN}\n\n{detail}",
+                "cn": f"{_CLI_CONTRACT_CN}\n\n{detail}",
                 lang: text,
             }
         else:

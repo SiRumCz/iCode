@@ -337,7 +337,12 @@ _HEADLESS_TASK_ENVELOPE = (
     "behavior / Execution rules are PART OF THE TASK SPEC.\n"
     "Do NOT ask what to work on — your first response must include a tool "
     "call (`list_files` / `grep` / `read_file` / `edit_file` / "
-    "`write_file`)."
+    "`write_file`).\n"
+    "CLI formatter rule: when the task says results are empty or issues "
+    "must not be reported, and a report formatter exists (`-f json`, etc.), "
+    "clear findings then still run the normal output path — valid JSON with "
+    "an empty `results` list, not empty stdout. Do not `sys.exit(0)` before "
+    "formatting."
 )
 
 ZERO_MUTATION_NUDGE = (
@@ -469,6 +474,19 @@ POST_MUTATION_EXPLORE_NUDGE = (
     "Do not summarize git history or ask what to work on."
 )
 
+CLI_CONTRACT_NUDGE_PREFIX = (
+    "Your test suite passed, but unfilled CLI/output contracts remain "
+    "(hidden eval tests check these separately). STOP re-running the full "
+    "suite. Use targeted live CLI `bash` checks:"
+)
+
+CLI_CONTRACT_NUDGE_SUFFIX = (
+    "Fix failing behavior, then re-run only the specific CLI smokes above — "
+    "not another full stestr/pytest loop."
+)
+
+MAX_REPEAT_SUITE_VERIFY_CONTINUATIONS = 2
+
 VERIFY_FAILED_NUDGE = (
     "Your last compile/check command failed (non-zero exit). "
     "Read the errors, fix the code, and run verification again via `bash` "
@@ -589,10 +607,13 @@ def is_headless_continuation_nudge(text: str) -> bool:
         GO_SUITE_NUDGE,
         TS_SUITE_NUDGE,
         TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE,
+        CLI_CONTRACT_NUDGE_PREFIX,
     ):
         if stripped == marker or stripped.startswith(marker[:48]):
             return True
     if stripped.startswith("Your patch is missing symbols/APIs the user named:"):
+        return True
+    if stripped.startswith(CLI_CONTRACT_NUDGE_PREFIX[:48]):
         return True
     return False
 
@@ -1599,6 +1620,236 @@ def _cli_flag_count(text: str) -> int:
     return len(set(re.findall(r"--[a-z][\w-]+", str(text or "").lower())))
 
 
+CLI_FLAG_DENSE_THRESHOLD = 4
+
+
+def cli_flag_dense_task(user_text: str) -> bool:
+    """Return True when the task names many CLI flags (needs contract checks)."""
+    return _cli_flag_count(user_text) >= CLI_FLAG_DENSE_THRESHOLD
+
+
+def extract_task_cli_flags(user_text: str) -> tuple[str, ...]:
+    """Distinct ``--flag`` names mentioned in the implement prompt."""
+    flags = sorted(set(re.findall(r"--[a-z][\w-]+", str(user_text or "").lower())))
+    return tuple(flags)
+
+
+def extract_prints_literal_contracts(
+    user_text: str,
+) -> tuple[tuple[str | None, str], ...]:
+    """Return ``(optional_flag, literal)`` pairs from ``prints "…"`` specs."""
+    found: list[tuple[str | None, str]] = []
+    seen_literals: set[str] = set()
+    for m in re.finditer(
+        r'(--[a-z][\w-]+)\s+prints?\s+"([^"]+)"',
+        user_text,
+        re.IGNORECASE,
+    ):
+        flag = m.group(1).lower()
+        literal = m.group(2)
+        found.append((flag, literal))
+        seen_literals.add(literal.lower())
+    for m in re.finditer(r'prints?\s+"([^"]+)"', user_text, re.IGNORECASE):
+        literal = m.group(1)
+        if literal.lower() in seen_literals:
+            continue
+        found.append((None, literal))
+    return tuple(found)
+
+
+def mentions_empty_results_formatter_contract(user_text: str) -> bool:
+    """Task ties empty/no-report results to JSON or another formatter."""
+    lower = str(user_text or "").lower()
+    has_empty = (
+        "results empty" in lower
+        or "without reporting" in lower
+        or "does not report" in lower
+        or "do not report" in lower
+    )
+    has_formatter = (
+        "json" in lower
+        or "-f" in lower
+        or "formatter" in lower
+        or "stdout" in lower
+    )
+    return has_empty and has_formatter
+
+
+def mentions_exit_zero_contract(user_text: str) -> bool:
+    return bool(re.search(r"\bexit\s+0\b", str(user_text or ""), re.IGNORECASE))
+
+
+def looks_like_live_cli_command(command: str) -> bool:
+    """Return True when *command* invokes a real CLI entrypoint (not pytest-only)."""
+    if not command or not str(command).strip():
+        return False
+    lower = str(command).lower()
+    if looks_like_git_archaeology(command):
+        return False
+    if re.search(r"\bpytest\b|\bstestr\b|\bunittest\b", lower):
+        return False
+    if re.search(r"\bgrep\b|\brg\b|\bfind\b|\bcat\b|\bhead\b|\btail\b", lower):
+        if not re.search(r"--[\w-]", lower):
+            return False
+    if re.search(
+        r"\bpython(?:3(?:\.\d+)?)?\s+-m\s+(?!pytest\b)[\w.]+\b", lower
+    ):
+        return True
+    if re.search(r"(?:^|\s|/)(?:[\w.-]+)\s+--[\w-]", lower):
+        return True
+    return False
+
+
+def looks_like_standalone_admin_cli(command: str, flag: str) -> bool:
+    """Heuristic: admin/maintenance flag run without scan targets."""
+    if flag.lower() not in str(command or "").lower():
+        return False
+    if not looks_like_live_cli_command(command):
+        return False
+    lower = str(command).lower()
+    flag_l = flag.lower()
+    if flag_l in {"--warm-cache", "--incremental", "--force-rescan"}:
+        return True
+    if re.search(r"(?:^|\s)(?:[\w./-]+\.py)\b", lower):
+        return False
+    return True
+
+
+def cli_contract_flag_smoke_satisfied(
+    flag: str, commands: tuple[str, ...]
+) -> bool:
+    flag_l = flag.lower()
+    for cmd in commands:
+        if flag_l not in cmd.lower():
+            continue
+        if looks_like_live_cli_command(cmd):
+            return True
+    return False
+
+
+def cli_contract_prints_literal_satisfied(
+    flag: str | None,
+    literal: str,
+    commands: tuple[str, ...],
+) -> bool:
+    for cmd in commands:
+        if flag and flag.lower() not in cmd.lower():
+            continue
+        if flag and not looks_like_standalone_admin_cli(cmd, flag):
+            continue
+        if not flag and not looks_like_live_cli_command(cmd):
+            continue
+        if literal.lower().replace(" n", "").replace(" m", "") in cmd.lower():
+            return True
+        if flag and looks_like_standalone_admin_cli(cmd, flag):
+            return True
+    return False
+
+
+def cli_contract_empty_json_satisfied(
+    user_text: str, commands: tuple[str, ...]
+) -> bool:
+    if not mentions_empty_results_formatter_contract(user_text):
+        return True
+    warm_flags = [f for f in extract_task_cli_flags(user_text) if "warm" in f]
+    if not warm_flags:
+        warm_flags = ["--warm-cache"]
+    for cmd in commands:
+        lower = cmd.lower()
+        if not any(flag in lower for flag in warm_flags):
+            continue
+        if not re.search(r"-f\s+['\"]?json\b", lower):
+            continue
+        if looks_like_live_cli_command(cmd):
+            return True
+    return False
+
+
+def cli_contract_pending_items(
+    user_text: str, bash_commands: tuple[str, ...] | list[str]
+) -> tuple[str, ...]:
+    """Checklist lines still missing after *bash_commands* in this turn."""
+    if not cli_flag_dense_task(user_text):
+        return ()
+    commands = tuple(str(c or "") for c in bash_commands if str(c or "").strip())
+    pending: list[str] = []
+
+    flags = extract_task_cli_flags(user_text)
+    missing_flags = [
+        flag for flag in flags if not cli_contract_flag_smoke_satisfied(flag, commands)
+    ]
+    if missing_flags:
+        shown = ", ".join(missing_flags[:10])
+        if len(missing_flags) > 10:
+            shown += ", …"
+        pending.append(
+            f"Live CLI smoke: invoke each new flag via `bash` on the real "
+            f"entrypoint (still missing: {shown}). Unit tests alone are not "
+            f"enough."
+        )
+
+    for flag, literal in extract_prints_literal_contracts(user_text):
+        if cli_contract_prints_literal_satisfied(flag, literal, commands):
+            continue
+        target = f"{flag} " if flag else ""
+        pending.append(
+            f'Run {target}with NO scan targets and confirm stdout matches '
+            f'the required text (spec: prints "{literal}").'
+        )
+
+    if not cli_contract_empty_json_satisfied(user_text, commands):
+        line = (
+            'For "results empty" / "without reporting issues" with `-f json`: '
+            "clear findings, still run the normal JSON formatter (`json.loads` "
+            'on stdout must succeed; `"results": []`), and do NOT `sys.exit(0)` '
+            "before output."
+        )
+        if mentions_exit_zero_contract(user_text):
+            line += (
+                " Required exit 0 must come from the formatter path, not a "
+                "pre-output early exit."
+            )
+        pending.append(line)
+
+    return tuple(pending)
+
+
+def cli_contract_satisfied(
+    user_text: str, bash_commands: tuple[str, ...] | list[str]
+) -> bool:
+    return not cli_contract_pending_items(user_text, bash_commands)
+
+
+def cli_contract_nudge(
+    user_text: str, bash_commands: tuple[str, ...] | list[str]
+) -> str:
+    pending = cli_contract_pending_items(user_text, bash_commands)
+    if not pending:
+        return ""
+    checklist = "\n".join(f"- {line}" for line in pending)
+    return f"{CLI_CONTRACT_NUDGE_PREFIX}\n\n{checklist}\n\n{CLI_CONTRACT_NUDGE_SUFFIX}"
+
+
+def suite_verify_continuation_redundant(
+    *,
+    verify_succeeded: bool,
+    python_suite_verified: bool,
+    go_suite_verified: bool,
+    typescript_suite_verified: bool,
+    suite_verify_without_mutation: int,
+) -> bool:
+    """Return True when another full-suite verify nudge would be wasted."""
+    if not verify_succeeded:
+        return False
+    if suite_verify_without_mutation < MAX_REPEAT_SUITE_VERIFY_CONTINUATIONS:
+        return False
+    return (
+        python_suite_verified
+        or go_suite_verified
+        or typescript_suite_verified
+    )
+
+
 def python_cli_integration_verify_matches(
     user_text: str, command: str
 ) -> bool:
@@ -1896,6 +2147,8 @@ def next_implement_continuation(
     typescript_suite_verified: bool = False,
     typescript_suite_passed_unqualified: bool = False,
     any_tool_attempted: bool = True,
+    bash_commands: tuple[str, ...] | list[str] = (),
+    suite_verify_without_mutation: int = 0,
 ) -> str | None:
     """Pick the next headless continuation nudge, or None if done."""
     if not looks_like_implement_task(user_text):
@@ -1935,6 +2188,21 @@ def next_implement_continuation(
         if verify_attempted:
             return VERIFY_FAILED_NUDGE
         return VERIFY_NUDGE
+    if suite_verify_continuation_redundant(
+        verify_succeeded=verify_succeeded,
+        python_suite_verified=python_suite_verified,
+        go_suite_verified=go_suite_verified,
+        typescript_suite_verified=typescript_suite_verified,
+        suite_verify_without_mutation=suite_verify_without_mutation,
+    ):
+        pending = cli_contract_pending_items(user_text, bash_commands)
+        if pending:
+            return cli_contract_nudge(user_text, bash_commands)
+        return None
+    if cli_flag_dense_task(user_text):
+        pending = cli_contract_pending_items(user_text, bash_commands)
+        if pending:
+            return cli_contract_nudge(user_text, bash_commands)
     if task_requires_submit(user_text) and not submit_attempted:
         return SUBMIT_NUDGE
     return None
@@ -2029,7 +2297,18 @@ def looks_like_explore_bash(command: str) -> bool:
 
 __all__ = [
     "INCOMPLETE_IMPLEMENT_ERROR",
-    "CHAT_ONLY_NUDGE",
+    "CLI_CONTRACT_NUDGE_PREFIX",
+    "CLI_FLAG_DENSE_THRESHOLD",
+    "MAX_REPEAT_SUITE_VERIFY_CONTINUATIONS",
+    "cli_contract_nudge",
+    "cli_contract_pending_items",
+    "cli_contract_satisfied",
+    "cli_flag_dense_task",
+    "extract_prints_literal_contracts",
+    "extract_task_cli_flags",
+    "looks_like_live_cli_command",
+    "mentions_empty_results_formatter_contract",
+    "suite_verify_continuation_redundant",
     "RESUME_AFTER_CHAT_NUDGE",
     "MAX_CHAT_ONLY_CONTINUATIONS",
     "HEADLESS_TASK_ENVELOPE_MARKER",

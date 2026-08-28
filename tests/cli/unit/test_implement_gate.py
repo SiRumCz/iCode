@@ -1558,3 +1558,100 @@ def test_fatal_provider_error_detection() -> None:
     assert is_fatal_provider_error("Invalid API key provided")
     assert not is_fatal_provider_error("File name too long")
     assert not is_fatal_provider_error("connection reset")
+
+
+BANDIT_CLI_TASK = (
+    "CLI must support --incremental/--no-incremental, --cache-dir, "
+    "--cache-size-limit. --cache-summary prints \"Cached files: N\". "
+    "CLI must support --warm-cache to pre-populate cache without reporting "
+    "issues (exit 0, results empty). JSON output must include cache_info."
+)
+
+
+def test_cli_contract_pending_for_bandit_like_task() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        cli_contract_pending_items,
+        cli_flag_dense_task,
+        mentions_empty_results_formatter_contract,
+    )
+
+    assert cli_flag_dense_task(BANDIT_CLI_TASK)
+    assert mentions_empty_results_formatter_contract(BANDIT_CLI_TASK)
+    pending = cli_contract_pending_items(BANDIT_CLI_TASK, ())
+    assert any("Live CLI smoke" in line for line in pending)
+    assert any("results empty" in line.lower() or "without reporting" in line.lower()
+               for line in pending)
+    assert any("Cached files" in line for line in pending)
+
+
+def test_cli_contract_satisfied_after_targeted_smokes() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        cli_contract_nudge,
+        cli_contract_pending_items,
+        cli_contract_satisfied,
+        next_implement_continuation,
+    )
+
+    smokes = (
+        "python -m bandit --incremental --cache-dir /tmp/c issue.py",
+        "python -m bandit --no-incremental --cache-dir /tmp/c issue.py",
+        "python -m bandit --cache-dir /tmp/c --cache-size-limit 10 issue.py",
+        "python -m bandit --cache-summary --cache-dir /tmp/c",
+        "python -m bandit --warm-cache --cache-dir /tmp/c -f json issue.py",
+        "python -m bandit --cache-stats --cache-dir /tmp/c",
+    )
+    assert cli_contract_satisfied(BANDIT_CLI_TASK, smokes)
+    assert cli_contract_pending_items(BANDIT_CLI_TASK, smokes) == ()
+    nudge = next_implement_continuation(
+        user_text=BANDIT_CLI_TASK,
+        mutate_attempted=True,
+        verify_attempted=True,
+        verify_succeeded=True,
+        submit_attempted=False,
+        shallow_only=False,
+        bash_commands=smokes,
+    )
+    assert nudge is None
+    partial = cli_contract_nudge(
+        BANDIT_CLI_TASK,
+        ("python -m pytest tests/unit/core/test_cache.py -q",),
+    )
+    assert "STOP re-running the full suite" in partial
+
+
+def test_suite_verify_redundant_switches_to_cli_contract() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        CLI_CONTRACT_NUDGE_PREFIX,
+        next_implement_continuation,
+        suite_verify_continuation_redundant,
+    )
+
+    assert suite_verify_continuation_redundant(
+        verify_succeeded=True,
+        python_suite_verified=True,
+        go_suite_verified=False,
+        typescript_suite_verified=False,
+        suite_verify_without_mutation=2,
+    )
+    nudge = next_implement_continuation(
+        user_text=BANDIT_CLI_TASK,
+        mutate_attempted=True,
+        verify_attempted=True,
+        verify_succeeded=True,
+        submit_attempted=False,
+        shallow_only=False,
+        python_mutated=True,
+        python_suite_verified=True,
+        bash_commands=("python -m stestr run",),
+        suite_verify_without_mutation=3,
+    )
+    assert nudge is not None
+    assert nudge.startswith(CLI_CONTRACT_NUDGE_PREFIX[:40])
+
+
+def test_headless_envelope_includes_formatter_semantics() -> None:
+    from openjiuwen_icode.features.implement_gate import wrap_headless_implement_prompt
+
+    wrapped = wrap_headless_implement_prompt(BANDIT_CLI_TASK)
+    assert "empty `results`" in wrapped or "empty `results` list" in wrapped
+    assert "sys.exit(0)" in wrapped
