@@ -90,7 +90,16 @@ _PYTHON_SOURCE_SUFFIXES = (".py",)
 
 _GO_SOURCE_SUFFIXES = (".go",)
 
-_TYPESCRIPT_SOURCE_SUFFIXES = (".ts", ".tsx")
+_TYPESCRIPT_SOURCE_SUFFIXES = (
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts",
+)
 
 _SUBMIT_HINTS = (
     "lolbench-submit",
@@ -684,7 +693,11 @@ def original_task_from_query(text: str) -> str:
     if not stripped:
         return ""
     if _ORIGINAL_TASK_MARKER in stripped:
-        return stripped.split(_ORIGINAL_TASK_MARKER, 1)[1].strip()
+        stripped = stripped.split(_ORIGINAL_TASK_MARKER, 1)[1].strip()
+    if stripped.startswith(_HEADLESS_TASK_ENVELOPE):
+        stripped = stripped[len(_HEADLESS_TASK_ENVELOPE) :].lstrip()
+        if stripped.startswith("---"):
+            stripped = stripped[3:].lstrip()
     return stripped
 
 
@@ -716,10 +729,11 @@ def primary_user_task_text(messages_or_ctx: Any) -> str:
             continue
         if is_headless_continuation_nudge(text):
             continue
-        if looks_like_implement_task(text):
-            return text
+        original = original_task_from_query(text)
+        if looks_like_implement_task(original):
+            return original
         if not fallback:
-            fallback = text
+            fallback = original
     return fallback
 
 
@@ -859,7 +873,7 @@ def is_go_source_path(path: str) -> bool:
 
 
 def is_typescript_source_path(path: str) -> bool:
-    """Return True when *path* looks like a TypeScript source file."""
+    """Return True when *path* looks like a JavaScript/TypeScript source file."""
     if not path or not str(path).strip():
         return False
     lower = str(path).lower().split("?", 1)[0]
@@ -916,7 +930,7 @@ def mutation_args_touch_go(tool_args: Any) -> bool:
 
 
 def mutation_args_touch_typescript(tool_args: Any) -> bool:
-    """Return True when edit/write args target a TypeScript source file."""
+    """Return True when edit/write args target a JavaScript/TypeScript source file."""
     return _mutation_args_touch_suffixes(
         tool_args, predicate=is_typescript_source_path
     )
@@ -2175,7 +2189,8 @@ def python_suite_command_matches_task_scope(user_text: str, command: str) -> boo
 
 def extract_required_prompt_symbols(text: str) -> tuple[str, ...]:
     """Pull API / flag names the user likely expects to appear in the patch."""
-    if not text or not str(text).strip():
+    text = original_task_from_query(text)
+    if not text:
         return ()
     found: list[str] = []
 

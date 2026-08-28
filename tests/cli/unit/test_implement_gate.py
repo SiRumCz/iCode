@@ -67,10 +67,16 @@ def test_looks_like_implement_task_harbor_spec() -> None:
 
 
 def test_original_task_from_query() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        wrap_headless_implement_prompt,
+    )
+
     original = "Add typed bindings to Anko."
     wrapped = wrap_implement_continuation_query(original, ZERO_MUTATION_NUDGE)
+    enveloped = wrap_headless_implement_prompt(original)
     assert original_task_from_query(original) == original
     assert original_task_from_query(wrapped) == original
+    assert original_task_from_query(enveloped) == original
     assert original_task_from_query("") == ""
 
 
@@ -89,12 +95,22 @@ def test_primary_user_task_text_skips_continuation_nudges() -> None:
 
 
 def test_primary_user_task_text_extracts_wrapped_continuation() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        wrap_headless_implement_prompt,
+    )
+
     original = (
         "Add support for asynchronous initialization of container registrations."
     )
     wrapped = wrap_implement_continuation_query(original, ZERO_MUTATION_NUDGE)
     assert not is_headless_continuation_nudge(wrapped)
     assert primary_user_task_text([{"role": "user", "content": wrapped}]) == original
+    assert (
+        primary_user_task_text(
+            [{"role": "user", "content": wrap_headless_implement_prompt(original)}]
+        )
+        == original
+    )
 
 
 def test_wrap_implement_continuation_query_includes_original_task() -> None:
@@ -406,7 +422,7 @@ def test_chainable_methods_count_as_wiring_symbols() -> None:
     ) == ("over", "window")
 
 
-def test_typescript_suite_required_for_pure_ts_edits() -> None:
+def test_typescript_suite_required_for_js_and_ts_edits() -> None:
     from openjiuwen_icode.features.implement_gate import (
         TS_SUITE_NUDGE,
         is_typescript_source_path,
@@ -417,9 +433,16 @@ def test_typescript_suite_required_for_pure_ts_edits() -> None:
 
     assert is_typescript_source_path("src/container.ts")
     assert is_typescript_source_path("src/__tests__/async-initialization.test.ts")
+    assert is_typescript_source_path("src/container.js")
+    assert is_typescript_source_path("src/container.jsx")
+    assert is_typescript_source_path("src/container.mjs")
+    assert is_typescript_source_path("src/container.cjs")
     assert not is_typescript_source_path("package.json")
     assert mutation_args_touch_typescript(
         {"file_path": "src/container.ts", "content": "export {}\n"}
+    )
+    assert mutation_args_touch_typescript(
+        {"file_path": "lib/lexer/shorthand.js", "content": "export {}\n"}
     )
     assert looks_like_typescript_suite_command("npm test -- async-initialization")
     assert looks_like_typescript_suite_command("npx jest async-initialization")
@@ -1115,6 +1138,7 @@ def test_integration_and_prompt_symbol_continuation() -> None:
         extract_required_prompt_symbols,
         missing_prompt_symbols,
         prompt_symbol_nudge,
+        wrap_headless_implement_prompt,
     )
 
     text = (
@@ -1127,6 +1151,11 @@ def test_integration_and_prompt_symbol_continuation() -> None:
     assert "reset_require_cache" in symbols
     assert "BeginRepl" in symbols
     assert "--module-debug" in symbols
+    enveloped = wrap_headless_implement_prompt(text)
+    assert extract_required_prompt_symbols(enveloped) == symbols
+    assert "list_files" not in extract_required_prompt_symbols(enveloped)
+    assert "edit_file" not in extract_required_prompt_symbols(enveloped)
+    assert "exit" not in extract_required_prompt_symbols(enveloped)
 
     assert (
         next_implement_continuation(
