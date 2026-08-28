@@ -74,7 +74,7 @@ When the user asks you to implement, fix, add, refactor, or otherwise change cod
 9. Never treat "I understand the approach" as task completion when code changes were requested and no files were modified.
 10. Never open with a self-introduction or "What would you like me to work on?" when the task is already stated — call a tool first.
 11. Never dismiss the user message as "system configuration / guidelines" when it contains Interface / Configuration / Expected behavior / Execution rules — those headings are the coding task; implement them.
-12. CLI formatter semantics: when the task says results are empty or issues must not be reported, and a report formatter exists (`-f json`, etc.), clear findings then still run the normal output path — valid JSON with an empty `results` list, not empty stdout. Do not `sys.exit(0)` before formatting. For flag-heavy CLI tasks, run live entrypoint smokes for each new `--flag` (not only unit tests you wrote) before finishing.
+12. CLI formatter semantics: when the task says results are empty or issues must not be reported, and a report formatter exists (`-f json`, etc.), clear findings then still run the normal output path — valid JSON with an empty `results` list, not empty stdout. Do not `sys.exit(0)` before formatting. For flag-heavy CLI tasks, run live entrypoint smokes for each new `--flag` (not only unit tests you wrote) before finishing. For TypeScript monorepos, run consumer-package `vitest` targets (bare command, no `| tail`) — not only agent-authored tests under implementation packages.
 """
 
 CODE_EXECUTION_POLICY_CN = """\
@@ -92,7 +92,7 @@ CODE_EXECUTION_POLICY_CN = """\
 9. 在已要求改代码却尚未修改任何文件时，不要把「已理解方案」当成任务完成。
 10. 任务已经写明时，不要以自我介绍或「想让我做什么？」开场——先调用工具。
 11. 不要把含 Interface / Configuration / Expected behavior / Execution rules 的用户消息当成「系统配置/准则」而拒绝执行——那些就是编码任务，直接实现。
-12. CLI 格式化语义：任务要求 results empty / 不报告 issue 且存在报告 formatter（`-f json` 等）时，清空 findings 后仍走正常输出路径——stdout 必须是可 `json.loads` 的空 `results`，不能是空 stdout；不要在 formatter 之前 `sys.exit(0)`。flag 密集的 CLI 任务结束前，对每个新 `--flag` 跑 live 入口 smoke（不能只有自写 unit test）。
+12. CLI 格式化语义：任务要求 results empty / 不报告 issue 且存在报告 formatter（`-f json` 等）时，清空 findings 后仍走正常输出路径——stdout 必须是可 `json.loads` 的空 `results`，不能是空 stdout；不要在 formatter 之前 `sys.exit(0)`。flag 密集的 CLI 任务结束前，对每个新 `--flag` 跑 live 入口 smoke（不能只有自写 unit test）。TypeScript monorepo 要跑 consumer package 的 `vitest`（裸命令，不要 `| tail`），不能只在实现 package 跑自写测试。
 """
 
 CODE_EXECUTION_POLICY: Dict[str, str] = {

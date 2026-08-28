@@ -14,9 +14,6 @@ from openjiuwen.harness.rails.base import DeepAgentRail
 
 from openjiuwen_icode.features.implement_gate import (
     bash_result_succeeded,
-    cli_contract_nudge,
-    cli_contract_satisfied,
-    cli_flag_dense_task,
     edit_args_look_shallow,
     extract_bash_command,
     extract_bash_command_from_result,
@@ -33,6 +30,8 @@ from openjiuwen_icode.features.implement_gate import (
     mutation_args_under_workspace,
     mutation_path_from_args,
     mutation_text_from_args,
+    post_verify_contract_nudge,
+    post_verify_contract_satisfied,
     primary_user_task_text,
     tool_is_edit_existing,
     verify_command_qualifies_for_completion,
@@ -392,10 +391,7 @@ class ImplementCompletenessRail(DeepAgentRail):
 
         if not self._mutated:
             return
-        cli_ok = (
-            not cli_flag_dense_task(self._user_text)
-            or cli_contract_satisfied(self._user_text, self._bash_commands)
-        )
+        cli_ok = post_verify_contract_satisfied(self._user_text, self._bash_commands)
         if (
             self._verify_succeeded
             and not self._shallow_only
@@ -481,10 +477,11 @@ class ImplementCompletenessRail(DeepAgentRail):
             }
         elif (
             self._verify_succeeded
-            and cli_flag_dense_task(self._user_text)
-            and not cli_contract_satisfied(self._user_text, self._bash_commands)
+            and not post_verify_contract_satisfied(
+                self._user_text, self._bash_commands
+            )
         ):
-            detail = cli_contract_nudge(self._user_text, self._bash_commands)
+            detail = post_verify_contract_nudge(self._user_text, self._bash_commands)
             text = (
                 f"{_CLI_CONTRACT_CN if zh else _CLI_CONTRACT_EN}\n\n{detail}"
             )

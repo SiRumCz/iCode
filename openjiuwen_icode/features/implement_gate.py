@@ -58,6 +58,8 @@ _VERIFY_HINTS = (
     "npm test",
     "npm run test",
     "pnpm test",
+    "pnpm run test",
+    "pnpm exec vitest",
     "yarn test",
     "go test",
     "go build",
@@ -70,7 +72,9 @@ _VERIFY_HINTS = (
     "mypy",
     "ruff check",
     "unittest",
-    "compileall",
+    "vitest",
+    "tstyche",
+    "pnpm exec vitest",
 )
 
 _NATIVE_SOURCE_SUFFIXES = (
@@ -541,25 +545,24 @@ TS_SUITE_NUDGE = (
     "You edited TypeScript sources but have not run a real test suite. "
     "`tsc --noEmit`, `npm run build`, or typecheck-only commands are not "
     "enough. Do not treat test files you wrote this session as sufficient "
-    "verification — run the project's full suite via `bash` (Deno repos: "
-    "`deno task test` or `deno test` on the module's `test/` tree; Node "
-    "repos: `npm test` or `npx jest --runInBand`), fix failures, and re-run "
-    "until they pass before finishing."
+    "verification — run the project's real integration tests via `bash` "
+    "(Effect monorepos: `npx vitest run --project @effect/platform-node "
+    "test/<Feature>.test.ts`; Deno repos: `deno task test`; Node repos: "
+    "`npm test` or `npx vitest run`) without piping through `tail`/`grep`, "
+    "fix failures, and re-run until they pass before finishing."
 )
 
 TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE = (
     "You ran TypeScript tests and they passed, but the harness still needs "
     "broader verification before this implement turn can finish. Do not "
     "re-run the same command, make empty touch commits, or tweak comments "
-    "to \"force a diff\". Instead: (1) run the repo's canonical suite "
-    "without piping through `head`/`tail`/`grep` (for example bare "
-    "`npm test`, `pnpm test`, or `npx vitest run`), or target the feature "
-    "area named in the task; (2) ensure chainable methods the user named "
-    "are wired on real runtime entrypoints (for example "
-    "`db.select().from(table).{methods}(...)`, including `$dynamic()` "
-    "variants when the repo uses them), not only in isolated helper unit "
-    "tests; (3) add or extend a test that exercises those builder chains, "
-    "fix any failures, and re-run verification."
+    "to \"force a diff\". Instead: (1) run the repo's canonical or "
+    "consumer-package suite without piping through `head`/`tail`/`grep` "
+    "(for example bare `npx vitest run --project @effect/platform-node "
+    "test/HttpApiSSE.test.ts`, `npm test`, or `pnpm exec vitest run`); "
+    "(2) ensure chainable methods the user named are wired on real runtime "
+    "entrypoints, not only in isolated helper unit tests; (3) fix any "
+    "failures and re-run verification."
 )
 
 
@@ -779,11 +782,29 @@ def extract_bash_command(tool_args: Any) -> str:
     return ""
 
 
+def bash_command_verify_subject(command: str) -> str:
+    """Return the primary shell segment used for verify heuristics.
+
+    Pipes/redirections often hide ``vitest``/``pytest`` from naive matching
+    when agents run ``vitest ... | tail``. Only the segment before the first
+    ``|``, ``&&``, or ``;`` is considered.
+    """
+    if not command or not str(command).strip():
+        return ""
+    text = str(command).strip()
+    text = re.split(r"\s\|\s", text, maxsplit=1)[0]
+    text = re.sub(r"\s2>&1\s*$", "", text)
+    return text.strip()
+
+
 def looks_like_verify_command(command: str) -> bool:
     """Return True when *command* looks like compile/test verification."""
-    if not command or not str(command).strip():
+    subject = bash_command_verify_subject(command)
+    if not subject:
         return False
-    lower = str(command).lower()
+    lower = subject.lower()
+    if re.search(r"\b(?:vitest|tstyche)\b", lower):
+        return True
     if re.search(r"\bjest\b", lower):
         return True
     if any(hint in lower for hint in _VERIFY_HINTS):
@@ -1101,6 +1122,7 @@ def verify_command_targets_agent_authored_tests(
     agent_created_test_names: frozenset[str] | set[str],
 ) -> bool:
     """Return True when *command* verifies only tests the agent created this turn."""
+    command = bash_command_verify_subject(command)
     if not command or not agent_created_test_names:
         return False
     if is_full_typescript_suite_command(command):
@@ -1136,6 +1158,7 @@ def verify_command_qualifies_for_completion(
     agent_created_test_names: frozenset[str] | set[str] = frozenset(),
 ) -> bool:
     """Return True when a successful verify command completes the verify gate."""
+    command = bash_command_verify_subject(command)
     if not workspace_mutated:
         return False
     if not success or not looks_like_verify_command(command):
@@ -1173,9 +1196,22 @@ def verify_command_qualifies_for_completion(
         if verify_command_targets_agent_authored_tests(
             command, agent_created_test_names
         ):
-            return False
+            targets = suggested_typescript_verify_targets(user_text)
+            if targets:
+                if not typescript_monorepo_integration_verify_matches(
+                    user_text, command
+                ):
+                    return False
+            else:
+                return False
         if user_text and not typescript_command_matches_task_scope(
             user_text, command
+        ):
+            return False
+        if typescript_wrong_package_only(command, user_text):
+            return False
+        if suggested_typescript_verify_targets(user_text) and (
+            not typescript_monorepo_integration_verify_matches(user_text, command)
         ):
             return False
     return True
@@ -1557,7 +1593,8 @@ def typescript_command_matches_task_scope(user_text: str, command: str) -> bool:
         return True
     stem_keywords = _shared_api_stems(user_text)
     repeated_keywords = _repeated_task_keywords(user_text)
-    keywords = stem_keywords | repeated_keywords
+    chainable_keywords = frozenset(extract_chainable_method_names(user_text))
+    keywords = stem_keywords | repeated_keywords | chainable_keywords
     if not keywords:
         return True
     lower = str(command).lower()
@@ -1830,6 +1867,216 @@ def cli_contract_nudge(
     return f"{CLI_CONTRACT_NUDGE_PREFIX}\n\n{checklist}\n\n{CLI_CONTRACT_NUDGE_SUFFIX}"
 
 
+POST_VERIFY_CONTRACT_NUDGE_PREFIX = CLI_CONTRACT_NUDGE_PREFIX
+
+
+def typescript_integration_task(user_text: str) -> bool:
+    """Return True when the task needs consumer-package TS integration tests."""
+    if suggested_typescript_verify_targets(user_text):
+        return True
+    lower = str(user_text or "").lower()
+    if any(
+        tok in lower
+        for tok in (
+            "text/event-stream",
+            "formatmessage",
+            "handlestream",
+            "nodehttpserver",
+            "client consumption",
+        )
+    ):
+        return True
+    return bool(re.search(r"\bHttpApi[A-Z]\w+\b", user_text or ""))
+
+
+def suggested_typescript_verify_targets(user_text: str) -> tuple[dict[str, str], ...]:
+    """Suggested vitest targets for monorepo integration tasks."""
+    lower = str(user_text or "").lower()
+    targets: list[dict[str, str]] = []
+    if (
+        "httpapisse" in lower
+        or "httpapiendpoint.sse" in lower
+        or ("httpapi" in lower and "sse" in lower and "stream" in lower)
+    ):
+        targets.append(
+            {
+                "project": "@effect/platform-node",
+                "test_file": "HttpApiSSE.test.ts",
+                "test_path": "test/HttpApiSSE.test.ts",
+                "path_hint": "platform-node/test",
+                "avoid_project": "@effect/platform",
+            }
+        )
+    return tuple(targets)
+
+
+def typescript_monorepo_integration_verify_matches(
+    user_text: str, command: str
+) -> bool:
+    """Return True when verify runs the consumer-package tests the task needs."""
+    targets = suggested_typescript_verify_targets(user_text)
+    if not targets:
+        return True
+    subject = bash_command_verify_subject(command).lower()
+    if not subject:
+        return False
+    for target in targets:
+        project = target["project"].lower()
+        if project not in subject and project.split("/", 1)[-1] not in subject:
+            continue
+        test_file = target.get("test_file", "").lower()
+        test_path = target.get("test_path", "").lower()
+        path_hint = target.get("path_hint", "").lower()
+        if test_file and test_file in subject:
+            return True
+        if test_path and test_path in subject:
+            return True
+        if path_hint and path_hint in subject.replace("\\", "/"):
+            return True
+        if re.search(rf"--project\s+{re.escape(target['project'])}", subject, re.I):
+            return True
+    return False
+
+
+def typescript_wrong_package_only(command: str, user_text: str) -> bool:
+    """Return True when verify runs only an implementation package, not consumer."""
+    if not typescript_integration_task(user_text):
+        return False
+    if typescript_monorepo_integration_verify_matches(user_text, command):
+        return False
+    subject = bash_command_verify_subject(command).lower()
+    if not subject or not looks_like_typescript_suite_command(command):
+        return False
+    for target in suggested_typescript_verify_targets(user_text):
+        avoid = target.get("avoid_project", "").lower()
+        if avoid and avoid in subject:
+            return True
+        impl_hint = target.get("path_hint", "").split("/", 1)[0]
+        if (
+            impl_hint
+            and impl_hint in subject
+            and "platform-node" not in subject
+            and target["project"].lower() not in subject
+        ):
+            return True
+    return False
+
+
+def wire_format_contract_task(user_text: str) -> bool:
+    """Return True when the task specifies SSE/HTTP wire-format output contracts."""
+    lower = str(user_text or "").lower()
+    return any(
+        tok in lower
+        for tok in (
+            "formatmessage",
+            "formatdatamessage",
+            "text/event-stream",
+            "event-stream",
+            "sse wire",
+            "wire-format",
+        )
+    ) or bool(re.search(r"\bformat(?:Message|DataMessage)\b", user_text or ""))
+
+
+def wire_format_contract_pending_items(
+    user_text: str, bash_commands: tuple[str, ...] | list[str]
+) -> tuple[str, ...]:
+    """Checklist for SSE/HTTP wire-format contracts still missing."""
+    if not wire_format_contract_task(user_text):
+        return ()
+    commands = tuple(str(c or "") for c in bash_commands if str(c or "").strip())
+    if typescript_integration_task(user_text) and any(
+        typescript_monorepo_integration_verify_matches(user_text, cmd)
+        for cmd in commands
+    ):
+        return ()
+    pending: list[str] = []
+    lower = str(user_text or "").lower()
+    if "formatmessage" in lower or "formatdatamessage" in lower:
+        pending.append(
+            "SSE wire format: `formatMessage` / `formatDataMessage` must emit "
+            "`data: {json}` lines (raw JSON payload), not `data: \"{...}\"` "
+            "with extra JSON.stringify quotes. Multi-line payloads use "
+            "multiple `data:` lines (`data: line1\\ndata: line2`), not escaped "
+            "newlines inside one quoted string."
+        )
+    if "text/event-stream" in lower or "event-stream" in lower:
+        pending.append(
+            "Verify `toResponse` / `fromStream` / `toStream` against real "
+            "HttpClientResponse/HttpServerResponse shapes (status + stream "
+            "body). `toResponse` must yield status 200 and SSE headers "
+            "(`content-type: text/event-stream`, `cache-control: no-cache`, "
+            "`connection: keep-alive`)."
+        )
+    if "event:" in lower or "event field" in lower or "_tag" in lower:
+        pending.append(
+            "Union SSE encoders must set the `event:` field from `_tag` and "
+            "decoders must dispatch on `event:` — confirm with consumer-package "
+            "integration tests, not only helper unit tests."
+        )
+    return tuple(pending)
+
+
+def typescript_monorepo_contract_pending_items(
+    user_text: str, bash_commands: tuple[str, ...] | list[str]
+) -> tuple[str, ...]:
+    """Checklist when consumer-package vitest has not been run."""
+    if not typescript_integration_task(user_text):
+        return ()
+    commands = tuple(str(c or "") for c in bash_commands if str(c or "").strip())
+    if any(
+        typescript_monorepo_integration_verify_matches(user_text, cmd)
+        for cmd in commands
+    ):
+        return ()
+    pending: list[str] = []
+    for target in suggested_typescript_verify_targets(user_text):
+        pending.append(
+            "Consumer-package integration tests: run "
+            f"`npx vitest run --project {target['project']} "
+            f"{target.get('test_path', target.get('test_file', ''))}` "
+            "(bare command — no `| tail`/`grep`). Tests you wrote under "
+            f"{target.get('avoid_project', 'another package')} alone are "
+            "not enough; hidden eval tests run in the consumer package."
+        )
+    if not pending and typescript_integration_task(user_text):
+        pending.append(
+            "Run the repo's consumer/integration vitest target for this "
+            "feature (not only agent-authored unit tests or `tsc --noEmit`)."
+        )
+    return tuple(pending)
+
+
+def post_verify_contract_pending_items(
+    user_text: str, bash_commands: tuple[str, ...] | list[str]
+) -> tuple[str, ...]:
+    """Merged CLI / wire-format / TS monorepo contract checklist."""
+    pending: list[str] = []
+    pending.extend(cli_contract_pending_items(user_text, bash_commands))
+    pending.extend(typescript_monorepo_contract_pending_items(user_text, bash_commands))
+    pending.extend(wire_format_contract_pending_items(user_text, bash_commands))
+    return tuple(pending)
+
+
+def post_verify_contract_satisfied(
+    user_text: str, bash_commands: tuple[str, ...] | list[str]
+) -> bool:
+    return not post_verify_contract_pending_items(user_text, bash_commands)
+
+
+def post_verify_contract_nudge(
+    user_text: str, bash_commands: tuple[str, ...] | list[str]
+) -> str:
+    pending = post_verify_contract_pending_items(user_text, bash_commands)
+    if not pending:
+        return ""
+    checklist = "\n".join(f"- {line}" for line in pending)
+    return (
+        f"{POST_VERIFY_CONTRACT_NUDGE_PREFIX}\n\n{checklist}\n\n"
+        f"{CLI_CONTRACT_NUDGE_SUFFIX}"
+    )
+
+
 def suite_verify_continuation_redundant(
     *,
     verify_succeeded: bool,
@@ -2006,15 +2253,29 @@ def _extract_wiring_symbols(text: str) -> tuple[str, ...]:
 
 def typescript_insufficient_verify_nudge(user_text: str) -> str:
     """Nudge when TS tests passed but did not satisfy the verify gate."""
+    extras: list[str] = []
+    for target in suggested_typescript_verify_targets(user_text):
+        extras.append(
+            "Run consumer-package tests: "
+            f"`npx vitest run --project {target['project']} "
+            f"{target.get('test_path', target.get('test_file', ''))}` "
+            "without piping through `tail`/`grep`."
+        )
     methods = extract_chainable_method_names(user_text)[:6]
-    if not methods:
+    if methods:
+        listed = ", ".join(f"`.{name}()`" for name in methods)
+        extras.append(
+            f"The task names these chainable methods — exercise them on real "
+            f"builder objects in code and tests (for example {listed})."
+        )
+    if wire_format_contract_task(user_text):
+        extras.append(
+            "SSE wire format: emit raw JSON in `data:` lines (`data: {\"seq\":1}`), "
+            "not quoted JSON strings; multi-line data uses multiple `data:` lines."
+        )
+    if not extras:
         return TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE
-    listed = ", ".join(f"`.{name}()`" for name in methods)
-    return (
-        f"{TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE}\n\n"
-        f"The task names these chainable methods — exercise them on real "
-        f"builder objects in code and tests (for example {listed})."
-    )
+    return f"{TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE}\n\n" + "\n".join(extras)
 
 
 def _extract_spec_field_names(text: str) -> tuple[str, ...]:
@@ -2195,14 +2456,13 @@ def next_implement_continuation(
         typescript_suite_verified=typescript_suite_verified,
         suite_verify_without_mutation=suite_verify_without_mutation,
     ):
-        pending = cli_contract_pending_items(user_text, bash_commands)
+        pending = post_verify_contract_pending_items(user_text, bash_commands)
         if pending:
-            return cli_contract_nudge(user_text, bash_commands)
+            return post_verify_contract_nudge(user_text, bash_commands)
         return None
-    if cli_flag_dense_task(user_text):
-        pending = cli_contract_pending_items(user_text, bash_commands)
-        if pending:
-            return cli_contract_nudge(user_text, bash_commands)
+    pending = post_verify_contract_pending_items(user_text, bash_commands)
+    if pending:
+        return post_verify_contract_nudge(user_text, bash_commands)
     if task_requires_submit(user_text) and not submit_attempted:
         return SUBMIT_NUDGE
     return None
@@ -2308,7 +2568,16 @@ __all__ = [
     "extract_task_cli_flags",
     "looks_like_live_cli_command",
     "mentions_empty_results_formatter_contract",
-    "suite_verify_continuation_redundant",
+    "bash_command_verify_subject",
+    "post_verify_contract_nudge",
+    "post_verify_contract_pending_items",
+    "post_verify_contract_satisfied",
+    "suggested_typescript_verify_targets",
+    "typescript_integration_task",
+    "typescript_monorepo_integration_verify_matches",
+    "typescript_wrong_package_only",
+    "wire_format_contract_pending_items",
+    "wire_format_contract_task",
     "RESUME_AFTER_CHAT_NUDGE",
     "MAX_CHAT_ONLY_CONTINUATIONS",
     "HEADLESS_TASK_ENVELOPE_MARKER",

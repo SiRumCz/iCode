@@ -1655,3 +1655,80 @@ def test_headless_envelope_includes_formatter_semantics() -> None:
     wrapped = wrap_headless_implement_prompt(BANDIT_CLI_TASK)
     assert "empty `results`" in wrapped or "empty `results` list" in wrapped
     assert "sys.exit(0)" in wrapped
+
+
+EFFECT_SSE_TASK = open(
+    "/data/deepswe/repo/tasks/effect-sse-httpapi-streaming/instruction.md"
+).read()
+
+
+def test_vitest_piped_command_counts_as_verify() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        bash_command_verify_subject,
+        looks_like_verify_command,
+        verify_command_qualifies_for_completion,
+    )
+
+    cmd = (
+        "cd /app && npx vitest run --project @effect/platform 2>&1 | tail -30"
+    )
+    assert "vitest" in bash_command_verify_subject(cmd)
+    assert looks_like_verify_command(cmd)
+    assert not verify_command_qualifies_for_completion(
+        cmd,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=EFFECT_SSE_TASK,
+        agent_created_test_names=frozenset({"HttpApiSSE.test.ts"}),
+    )
+
+
+def test_effect_sse_requires_platform_node_not_platform_only() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        post_verify_contract_pending_items,
+        typescript_monorepo_integration_verify_matches,
+        typescript_wrong_package_only,
+        verify_command_qualifies_for_completion,
+    )
+
+    wrong = "npx vitest run --project @effect/platform test/HttpApiSSE.test.ts"
+    right = "npx vitest run --project @effect/platform-node test/HttpApiSSE.test.ts"
+    agent_tests = frozenset({"HttpApiSSE.test.ts", "httpapisse.test.ts"})
+
+    assert typescript_wrong_package_only(wrong, EFFECT_SSE_TASK)
+    assert not typescript_monorepo_integration_verify_matches(
+        EFFECT_SSE_TASK, wrong
+    )
+    assert typescript_monorepo_integration_verify_matches(EFFECT_SSE_TASK, right)
+    assert not verify_command_qualifies_for_completion(
+        wrong,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=EFFECT_SSE_TASK,
+        agent_created_test_names=agent_tests,
+    )
+    assert verify_command_qualifies_for_completion(
+        right,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=EFFECT_SSE_TASK,
+        agent_created_test_names=agent_tests,
+    )
+    pending = post_verify_contract_pending_items(EFFECT_SSE_TASK, (wrong,))
+    assert any("platform-node" in line for line in pending)
+    assert post_verify_contract_pending_items(EFFECT_SSE_TASK, (right,)) == ()
+
+
+def test_wire_format_contract_pending_for_effect_sse() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        wire_format_contract_pending_items,
+        wire_format_contract_task,
+    )
+
+    assert wire_format_contract_task(EFFECT_SSE_TASK)
+    pending = wire_format_contract_pending_items(EFFECT_SSE_TASK, ())
+    assert any("data:" in line for line in pending)
+    assert any("text/event-stream" in line.lower() or "toResponse" in line for line in pending)

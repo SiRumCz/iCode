@@ -317,9 +317,8 @@ class SessionHost:
                 WORKTREE_NUDGE,
                 bash_result_succeeded,
                 chat_only_continuation_nudge,
-                cli_contract_nudge,
-                cli_contract_satisfied,
-                cli_flag_dense_task,
+                post_verify_contract_nudge,
+                post_verify_contract_satisfied,
                 edit_args_look_shallow,
                 extract_bash_command,
                 extract_bash_command_from_result,
@@ -675,12 +674,10 @@ class SessionHost:
                         )
                         task_text = _task_text()
                         if verify_succeeded:
-                            if cli_flag_dense_task(
-                                task_text
-                            ) and not cli_contract_satisfied(
+                            if not post_verify_contract_satisfied(
                                 task_text, tuple(bash_commands)
                             ):
-                                forced = cli_contract_nudge(
+                                forced = post_verify_contract_nudge(
                                     task_text, tuple(bash_commands)
                                 )
                             elif forced is not None and any(
@@ -700,7 +697,7 @@ class SessionHost:
                             forced = VERIFY_NUDGE
                         if forced is None and verify_succeeded:
                             logger.info(
-                                "soft-stop with verify+CLI contract satisfied; "
+                                "soft-stop with verify+post-verify contracts satisfied; "
                                 "finishing turn"
                             )
                             break
