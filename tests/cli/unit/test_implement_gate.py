@@ -600,6 +600,36 @@ def test_bash_result_success_detection() -> None:
     assert extract_bash_command_from_result(ok) == "make -j2 python"
 
 
+def test_dict_bash_result_preserves_full_suite_command() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        is_full_typescript_suite_command,
+    )
+
+    result = {
+        "content": (
+            "Command: cd /app && npm test\n"
+            "Stdout: > css-tree@3.2.1 test\n"
+            "> mocha lib/__tests --require lib/__tests/helpers/setup.js\n"
+            "16800 passing\n"
+            "Stderr: (empty)\n"
+            "Exit Code: 0"
+        )
+    }
+
+    command = extract_bash_command_from_result(result)
+
+    assert command == "cd /app && npm test"
+    assert bash_result_succeeded(result) is True
+    assert is_full_typescript_suite_command(command)
+    assert verify_command_qualifies_for_completion(
+        command,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text="Add expandShorthand and compressShorthand to the lexer.",
+    )
+
+
 def test_bash_result_detects_jest_failure_with_piped_zero_exit() -> None:
     """Piped ``tail`` can mask jest's non-zero exit; stdout summary must fail."""
     piped_fail = (

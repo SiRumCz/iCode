@@ -14,6 +14,7 @@ from pathlib import Path
 from openjiuwen_icode.features.mutations import (
     mutation_path_from_args,
     path_under_workspace,
+    tool_result_payload,
 )
 
 _IMPLEMENT_HINTS = (
@@ -1265,10 +1266,20 @@ def is_shallow_signature_edit(old_string: str, new_string: str) -> bool:
     return False
 
 
+def _bash_result_text(result: Any) -> str:
+    """Unwrap text from string, mapping, or object-shaped tool results."""
+    content, _ = tool_result_payload(result)
+    return content if isinstance(content, str) else str(content or "")
+
+
 def extract_bash_command_from_result(result: Any) -> str:
     """Best-effort extract of the shell command from a bash tool result."""
-    text = result if isinstance(result, str) else str(result or "")
-    match = re.search(r"Command:\s*(.+?)(?:\n|$)", text)
+    text = _bash_result_text(result)
+    match = re.search(
+        r"Command:\s*(.+?)(?:\nStdout:|\nStderr:|\nExit Code:|\Z)",
+        text,
+        re.DOTALL,
+    )
     if match:
         return match.group(1).strip()
     return ""
@@ -1276,7 +1287,7 @@ def extract_bash_command_from_result(result: Any) -> str:
 
 def _bash_stdout_from_result(result: Any) -> str:
     """Extract stdout blob from a formatted bash tool result string."""
-    text = result if isinstance(result, str) else str(result or "")
+    text = _bash_result_text(result)
     match = re.search(r"Stdout:\s*(.*?)(?:\nStderr:|\nExit Code:|\Z)", text, re.DOTALL)
     if match:
         return match.group(1)
@@ -1362,7 +1373,7 @@ def bash_result_succeeded(
     tool_success: bool | None = None,
 ) -> bool | None:
     """Return True/False for bash exit status, or None if unknown."""
-    text = result if isinstance(result, str) else str(result or "")
+    text = _bash_result_text(result)
     exit_ok: bool | None = None
     if tool_success is not None:
         exit_ok = bool(tool_success)

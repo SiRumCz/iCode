@@ -71,6 +71,8 @@ class TestBuildSystemPrompt:
         assert "Coding execution policy" in prompt
         assert "edit_file" in prompt
         assert "Do not stop after analysis" in prompt
+        assert "authoritative repository metadata" in prompt
+        assert "never weaken an expectation" in prompt
 
     def test_non_code_profile_skips_coding_overlay(self) -> None:
         """Non-code profiles omit coding identity / execution policy."""
