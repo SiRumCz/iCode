@@ -311,6 +311,7 @@ class SessionHost:
                 NATIVE_BUILD_NUDGE,
                 POST_MUTATION_EXPLORE_NUDGE,
                 PYTHON_SUITE_NUDGE,
+                STALL_CONTINUATION_NUDGE,
                 TS_SUITE_NUDGE,
                 VERIFY_FAILED_NUDGE,
                 VERIFY_NUDGE,
@@ -322,6 +323,7 @@ class SessionHost:
                 edit_args_look_shallow,
                 extract_bash_command,
                 extract_bash_command_from_result,
+                is_broken_tool_history_error,
                 is_fatal_provider_error,
                 looks_like_implement_task,
                 looks_like_native_build_command,
@@ -714,6 +716,41 @@ class SessionHost:
                         continue
                     raise
                 except Exception as exc:
+                    # An interrupted tool batch can leave an assistant tool-call
+                    # tail that OpenAI-compatible providers reject. Continuing
+                    # on that SDK session only replays invalid history, so move
+                    # the provider context to a clean runtime session while
+                    # preserving the public session and workspace.
+                    if (
+                        self._auto_approve
+                        and continuation_attempts < max_continuations
+                        and looks_like_implement_task(_task_text())
+                        and is_broken_tool_history_error(exc)
+                    ):
+                        reset_runtime_session = getattr(
+                            self._backend, "reset_runtime_session", None
+                        )
+                        if callable(reset_runtime_session):
+                            try:
+                                await reset_runtime_session(sid)
+                            except Exception:  # noqa: BLE001
+                                logger.warning(
+                                    "failed to reset corrupted runtime session",
+                                    exc_info=True,
+                                )
+                            else:
+                                logger.warning(
+                                    "provider rejected unpaired tool history; "
+                                    "continuing in a clean runtime session "
+                                    "(%s/%s)",
+                                    continuation_attempts + 1,
+                                    max_continuations,
+                                )
+                                continuation_attempts += 1
+                                query = wrap_implement_continuation_query(
+                                    _task_text(), STALL_CONTINUATION_NUDGE
+                                )
+                                continue
                     # Fatal provider errors (billing/auth) will not recover —
                     # if the worktree already has a patch, finish the turn so
                     # eval adapters can commit instead of burning git-log loops.

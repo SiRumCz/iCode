@@ -667,6 +667,7 @@ class LocalBackend:
         self.agent: Any = None
         self.tracker: Optional[TokenTrackingRail] = None
         self._session_id: str = f"cli-{uuid4().hex[:8]}"
+        self._runtime_session_overrides: dict[str, str] = {}
         self._loaded_extensions: set[str] = set()
         self._pending_workdir: Optional[str] = None
 
@@ -715,7 +716,10 @@ class LocalBackend:
 
         apply_pending_workdir_cwd(self)
         await self._load_runtime_extensions()
-        sid = session_id or self._session_id
+        requested_sid = session_id or self._session_id
+        sid = self._runtime_session_overrides.get(
+            requested_sid, requested_sid
+        )
         attempt = {"n": 0}
         continuation_retry = isinstance(query, str) and (
             is_wrapped_implement_continuation_query(query)
@@ -811,6 +815,24 @@ class LocalBackend:
             )
         except Exception:  # noqa: BLE001
             logger.debug("cancel leftover agent tasks failed", exc_info=True)
+
+    async def reset_runtime_session(self, session_id: str | None = None) -> str:
+        """Use a clean SDK session after provider history corruption.
+
+        The public iCode session remains unchanged for event storage and UI
+        continuity. Only subsequent Runner calls move to a fresh provider
+        context, where the headless continuation can safely restate the task.
+        """
+        await self.abort()
+        requested_sid = session_id or self._session_id
+        recovered_sid = f"{requested_sid}-recovery-{uuid4().hex[:8]}"
+        self._runtime_session_overrides[requested_sid] = recovered_sid
+        logger.warning(
+            "reset corrupted runtime session %s as %s",
+            requested_sid,
+            recovered_sid,
+        )
+        return recovered_sid
 
     async def steer(self, msg: str) -> None:
         """Forward mid-turn inject to DeepAgent ``steer``."""

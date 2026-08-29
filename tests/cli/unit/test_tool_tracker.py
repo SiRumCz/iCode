@@ -86,3 +86,27 @@ async def test_after_tool_call_serializes_tool_output() -> None:
     event = session.write_stream.await_args.args[0]
     assert event.payload["tool_success"] is True
     assert event.payload["tool_data"]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_after_tool_call_fills_empty_failure_diagnostic() -> None:
+    session = SimpleNamespace(write_stream=AsyncMock())
+    tool_result = ToolOutput(success=False)
+    tool_msg = SimpleNamespace(content=str(tool_result))
+    ctx = SimpleNamespace(
+        session=session,
+        inputs=SimpleNamespace(
+            tool_name="edit_file",
+            tool_args={"file_path": "/tmp/a.py"},
+            tool_result=tool_result,
+            tool_msg=tool_msg,
+        ),
+    )
+
+    await ToolTrackingRail().after_tool_call(ctx)
+
+    event = session.write_stream.await_args.args[0]
+    assert event.payload["tool_success"] is False
+    assert "failed without diagnostic output" in event.payload["tool_result"]
+    assert tool_result.error == event.payload["tool_result"]
+    assert tool_msg.content == event.payload["tool_result"]

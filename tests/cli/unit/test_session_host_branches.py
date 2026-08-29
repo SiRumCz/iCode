@@ -435,6 +435,73 @@ async def test_implement_tool_crash_continues_instead_of_turn_failed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_broken_tool_history_resets_runtime_session() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        INCOMPLETE_IMPLEMENT_ERROR,
+        STALL_CONTINUATION_NUDGE,
+    )
+
+    bus = EventBus()
+    queries: list[object] = []
+
+    class BrokenThenOk(DemoBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reset_sessions: list[str | None] = []
+
+        async def reset_runtime_session(
+            self, session_id: str | None = None
+        ) -> str:
+            self.reset_sessions.append(session_id)
+            return "clean-runtime"
+
+        async def run_streaming(
+            self, query: object, session_id: str | None = None
+        ):
+            queries.append(query)
+            if len(queries) == 1:
+                raise RuntimeError(
+                    "An assistant message with 'tool_calls' must be followed "
+                    "by tool messages responding to each 'tool_call_id' "
+                    "(insufficient tool messages following tool_calls message)"
+                )
+            async for chunk in DemoBackend.run_streaming(
+                self, query, session_id
+            ):
+                yield chunk
+
+    backend = BrokenThenOk()
+    host = SessionHost(
+        bus, backend, session_id="s1", auto_approve=True
+    )
+    failed: list[TurnFailed] = []
+    done = asyncio.Event()
+
+    async def on_fail(ev: TurnFailed) -> None:
+        failed.append(ev)
+        done.set()
+
+    await bus.subscribe(TurnFailed, on_fail)
+    await host.start()
+    await bus.publish(
+        UserMessage(
+            text="Implement a new AutoToc rule in src/rules/auto-toc.ts",
+            session_id="s1",
+        )
+    )
+    await asyncio.wait_for(done.wait(), timeout=5)
+    await host.stop()
+
+    assert backend.reset_sessions == ["s1"]
+    assert any(
+        isinstance(q, str) and STALL_CONTINUATION_NUDGE[:40] in q
+        for q in queries[1:]
+    )
+    assert failed
+    assert INCOMPLETE_IMPLEMENT_ERROR in failed[-1].error
+
+
+@pytest.mark.asyncio
 async def test_non_implement_tool_crash_still_turn_failed() -> None:
     bus = EventBus()
 

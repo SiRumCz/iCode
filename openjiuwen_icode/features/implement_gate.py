@@ -283,6 +283,25 @@ TOOL_RUNTIME_NUDGE = (
 )
 
 
+def is_broken_tool_history_error(exc: BaseException | str) -> bool:
+    """Return True for provider rejections caused by unpaired tool calls."""
+    text = str(exc or "").lower()
+    if not text:
+        return False
+    markers = (
+        "insufficient tool messages",
+        "tool_calls must be followed by tool messages",
+        "tool_calls' must be followed by tool messages",
+    )
+    if any(marker in text for marker in markers):
+        return True
+    return (
+        "tool_call_id" in text
+        and ("assistant message" in text or "tool message" in text)
+        and ("must" in text or "invalid" in text)
+    )
+
+
 def is_fatal_provider_error(exc: BaseException | str) -> bool:
     """Return True when an LLM/provider error should stop implement continuations.
 
@@ -2726,6 +2745,7 @@ __all__ = [
     "is_typescript_source_path",
     "is_headless_continuation_nudge",
     "is_wrapped_implement_continuation_query",
+    "is_broken_tool_history_error",
     "is_native_source_path",
     "is_python_source_path",
     "is_shallow_signature_edit",

@@ -1705,6 +1705,23 @@ def test_fatal_provider_error_detection() -> None:
     assert not is_fatal_provider_error("connection reset")
 
 
+def test_broken_tool_history_error_detection() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        is_broken_tool_history_error,
+    )
+
+    assert is_broken_tool_history_error(
+        "An assistant message with 'tool_calls' must be followed by tool "
+        "messages responding to each 'tool_call_id' "
+        "(insufficient tool messages following tool_calls message)"
+    )
+    assert is_broken_tool_history_error(
+        "Tool message has an invalid tool_call_id for the assistant message"
+    )
+    assert not is_broken_tool_history_error("Tool execution error: bad path")
+    assert not is_broken_tool_history_error("connection reset")
+
+
 BANDIT_CLI_TASK = (
     "CLI must support --incremental/--no-incremental, --cache-dir, "
     "--cache-size-limit. --cache-summary prints \"Cached files: N\". "

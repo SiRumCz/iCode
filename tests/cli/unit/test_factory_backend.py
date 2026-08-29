@@ -548,6 +548,37 @@ class TestLocalBackendMethods:
             _ = [c async for c in backend.run_streaming("q2")]
 
     @pytest.mark.asyncio
+    async def test_reset_runtime_session_isolates_corrupt_history(
+        self, cli_cfg: CLIConfig
+    ) -> None:
+        sessions: list[str] = []
+
+        async def _stream(
+            *_a: Any, session: str, **_k: Any
+        ) -> AsyncIterator[Any]:
+            sessions.append(session)
+            yield SimpleNamespace(type="llm_output", payload={"content": "ok"})
+
+        backend = LocalBackend(cli_cfg)
+        backend.agent = MagicMock(abort=AsyncMock())
+
+        with patch(
+            "openjiuwen_icode.agent.factory.Runner"
+        ) as runner, patch(
+            "openjiuwen_icode.host.workdirs.apply_pending_workdir_cwd",
+        ), patch(
+            "openjiuwen_icode.agent.factory.cancel_in_flight_agent_tasks",
+            new=AsyncMock(),
+        ):
+            runner.run_agent_streaming = MagicMock(side_effect=_stream)
+            _ = [c async for c in backend.run_streaming("q1", session_id="s1")]
+            recovered = await backend.reset_runtime_session("s1")
+            _ = [c async for c in backend.run_streaming("q2", session_id="s1")]
+
+        assert sessions == ["s1", recovered]
+        assert recovered.startswith("s1-recovery-")
+
+    @pytest.mark.asyncio
     async def test_load_extensions_noop(
         self, cli_cfg: CLIConfig
     ) -> None:

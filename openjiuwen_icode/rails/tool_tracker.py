@@ -47,6 +47,28 @@ class ToolTrackingRail(AgentRail):
     priority = 5  # very low — run after everything else
 
     @staticmethod
+    def _ensure_failed_tool_diagnostic(
+        tool_name: str,
+        tool_result: Any,
+        tool_msg: Any,
+    ) -> None:
+        """Replace empty ToolOutput failures with actionable model feedback."""
+        if (
+            not isinstance(tool_result, ToolOutput)
+            or tool_result.success
+            or tool_result.error
+            or tool_result.data is not None
+        ):
+            return
+        detail = (
+            f"Tool '{tool_name or 'unknown'}' failed without diagnostic output. "
+            "Check the arguments and retry, or use an alternative tool."
+        )
+        tool_result.error = detail
+        if tool_msg is not None and hasattr(tool_msg, "content"):
+            tool_msg.content = detail
+
+    @staticmethod
     def _build_tool_result_payload(
         tool_name: str,
         tool_result: Any,
@@ -140,8 +162,12 @@ class ToolTrackingRail(AgentRail):
         inputs = ctx.inputs
         tool_name = getattr(inputs, "tool_name", "")
         tool_result = getattr(inputs, "tool_result", None)
+        tool_msg = getattr(inputs, "tool_msg", None)
         tool_args = getattr(inputs, "tool_args", "")
         tool_call_id = _extract_tool_call_id(inputs)
+        self._ensure_failed_tool_diagnostic(
+            tool_name, tool_result, tool_msg
+        )
 
         # Normalize args
         if isinstance(tool_args, str):
