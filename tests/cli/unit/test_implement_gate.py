@@ -662,6 +662,14 @@ def test_bash_result_detects_pytest_and_go_failures_in_stdout() -> None:
     )
     assert bash_result_succeeded(pytest_fail) is False
 
+    piped_pytest_fail = (
+        "Command: pytest tests -q -x 2>&1 | tail -6\n"
+        "Stdout: !!!!!!!!! stopping after 1 failures !!!!!!!!!\n"
+        "1 failed, 1086 passed in 4.05s\n"
+        "Exit Code: 0"
+    )
+    assert bash_result_succeeded(piped_pytest_fail) is False
+
     go_fail = (
         "Command: go test ./pkg\nStdout: --- FAIL: TestFoo (0.00s)\n"
         "FAIL\texample.com/pkg\t0.01s\nExit Code: 0"

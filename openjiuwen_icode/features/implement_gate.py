@@ -502,8 +502,10 @@ CLI_CONTRACT_NUDGE_SUFFIX = (
 MAX_REPEAT_SUITE_VERIFY_CONTINUATIONS = 2
 
 VERIFY_FAILED_NUDGE = (
-    "Your last compile/check command failed (non-zero exit). "
-    "Read the errors, fix the code, and run verification again via `bash` "
+    "Your last compile/check command reported failures (its exit status may "
+    "have been masked by a shell pipeline). Read the errors, fix the code, "
+    "and run verification again via `bash` without piping through "
+    "`head`/`tail`/`grep` "
     "(for Python: re-run the failing `pytest` cases; "
     "for C extensions: `make -j2` or rebuild the touched `.o`; for Rust: "
     "`cargo check`; for Go: `go test` / `go build`). Do not run "
@@ -1354,8 +1356,11 @@ def bash_output_indicates_failure(result: Any) -> bool:
     if "Test suite failed to run" in blob:
         return True
 
-    # pytest summary (``= 2 failed, 1 passed in 0.12s =``).
+    # pytest summaries may lose their decorative ``=`` banner when piped
+    # through tail/grep (``2 failed, 1 passed in 0.12s``).
     if re.search(r"=\s*[1-9]\d*\s+failed\b", blob):
+        return True
+    if re.search(r"(?:^|\n)\s*[1-9]\d*\s+failed\b", blob):
         return True
     if re.search(r"^FAILED\s+\S", blob, re.MULTILINE):
         return True

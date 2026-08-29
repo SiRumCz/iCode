@@ -75,6 +75,8 @@ class TestBuildSystemPrompt:
         assert "never weaken an expectation" in prompt
         assert "invalid-input matrix" in prompt
         assert "unmatched quotes or delimiters" in prompt
+        assert "vary chunk boundaries" in prompt
+        assert "iteration errors close or release" in prompt
         assert "reproduce at the base revision" in prompt
         assert "do not edit shared test configuration" in prompt
 
