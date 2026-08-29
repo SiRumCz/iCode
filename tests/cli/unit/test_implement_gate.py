@@ -598,6 +598,41 @@ def test_typescript_scope_rejects_agent_only_initialize_tests() -> None:
     )
 
 
+def test_typescript_gate_rejects_plain_js_test_created_under_test_dir() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        is_full_typescript_suite_command,
+        verify_command_qualifies_for_completion,
+        verify_command_targets_agent_authored_tests,
+    )
+
+    task = "Add atomic signal selectors and expose selectorHealth."
+    agent_tests = frozenset({"atomic-selectors.js", "atomic-selectors"})
+    targeted = "BABEL_ENV=test npx jest test/jest/atomic-selectors.js"
+    targeted_in_band = f"{targeted} --runInBand"
+
+    assert verify_command_targets_agent_authored_tests(targeted, agent_tests)
+    assert not is_full_typescript_suite_command(targeted_in_band)
+    assert verify_command_targets_agent_authored_tests(
+        targeted_in_band, agent_tests
+    )
+    assert not verify_command_qualifies_for_completion(
+        targeted,
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    assert verify_command_qualifies_for_completion(
+        "BABEL_ENV=test npx jest --runInBand",
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+
+
 def test_native_build_nudge_before_submit() -> None:
     text = "Implement PEP 696 then run lolbench-submit"
     assert (

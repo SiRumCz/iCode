@@ -306,15 +306,17 @@ class MutationTracker:
             if mut.kind != "create" or not self._path_under_workspace(mut.path):
                 continue
             lower = mut.path.lower()
-            if re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)$", lower):
+            if _is_javascript_test_file_path(lower):
                 base = Path(mut.path).name.lower()
                 names.add(base)
                 match = re.match(
-                    r"^(.*)\.(?:test|spec)\.(?:ts|tsx|js|jsx)$",
+                    r"^(.*)\.(?:test|spec)\.(?:[cm]?[jt]s|[jt]sx)$",
                     base,
                 )
                 if match:
                     names.add(match.group(1))
+                else:
+                    names.add(Path(base).stem)
                 continue
             if re.search(r"(?:^|/)test_[\w.-]+\.py$", lower) or re.search(
                 r"(?:^|/)[\w.-]+_test\.py$", lower
@@ -544,10 +546,24 @@ def _git_checkout_file(workspace: Path, path: str) -> bool:
     return proc.returncode == 0
 
 
+def _is_javascript_test_file_path(path: str) -> bool:
+    """Return True for convention-named or canonically located JS/TS tests."""
+    lower = str(path).replace("\\", "/").lower()
+    extension = r"(?:[cm]?[jt]s|[jt]sx)"
+    if re.search(rf"\.(?:test|spec)\.{extension}$", lower):
+        return True
+    return bool(
+        re.search(
+            rf"(?:^|/)(?:tests?|__tests__|specs?|__specs__)/.+\.{extension}$",
+            lower,
+        )
+    )
+
+
 def _is_test_file_path(path: str) -> bool:
     """Return True when *path* looks like a test module path."""
     lower = str(path).lower()
-    if re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)$", lower):
+    if _is_javascript_test_file_path(lower):
         return True
     if re.search(r"(?:^|/)test_[\w.-]+\.py$", lower) or re.search(
         r"(?:^|/)[\w.-]+_test\.py$", lower

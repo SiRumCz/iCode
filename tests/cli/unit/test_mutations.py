@@ -171,6 +171,25 @@ def test_agent_created_test_names_tracks_new_test_files(tmp_path: Path) -> None:
     assert "container.initialize" in names
 
 
+def test_agent_created_test_names_tracks_plain_js_under_test_dir(
+    tmp_path: Path,
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    test_file = ws / "test" / "jest" / "atomic-selectors.js"
+    test_file.parent.mkdir(parents=True)
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("s")
+    tracker.record_tool_mutation("write_file", {"file_path": str(test_file)})
+    test_file.write_text("test('x', () => {})\n", encoding="utf-8")
+    tracker.refresh_after_hashes()
+
+    names = tracker.agent_created_test_names()
+    assert "atomic-selectors.js" in names
+    assert "atomic-selectors" in names
+
+
 def test_agent_created_test_names_tracks_python_test_files(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -245,6 +264,26 @@ def test_bash_created_test_paths_are_tracked(tmp_path: Path) -> None:
     names = tracker.agent_created_test_names()
     assert "test_nosec_directives.py" in names
     assert "nosec_directives" in names
+
+
+def test_bash_created_plain_js_test_path_is_tracked(tmp_path: Path) -> None:
+    from openjiuwen_icode.features.mutations import test_paths_from_bash_command
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    test_file = ws / "test" / "jest" / "atomic-selectors.js"
+    test_file.parent.mkdir(parents=True)
+    command = f"cat > {test_file} <<'EOF'\ntest('x', () => {{}})\nEOF"
+
+    assert test_paths_from_bash_command(command) == (str(test_file),)
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("s")
+    tracker.record_bash_created_path(str(test_file))
+    test_file.write_text("test('x', () => {})\n", encoding="utf-8")
+    tracker.refresh_after_hashes()
+
+    assert "atomic-selectors" in tracker.agent_created_test_names()
 
 
 def test_bash_append_to_existing_test_is_not_tracked_as_created(

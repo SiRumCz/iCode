@@ -1133,6 +1133,12 @@ def is_full_typescript_suite_command(command: str) -> bool:
     if re.search(r"\b(?:npx\s+)?jest\b", lower):
         if re.search(r"\.test\.(?:ts|tsx|js|jsx)\b", lower):
             return False
+        if re.search(
+            r"(?:tests?|__tests__|specs?|__specs__)/"
+            r"[^\s|;&]+\.(?:[cm]?[jt]s|[jt]sx)\b",
+            lower,
+        ):
+            return False
         if re.search(r"--testpathignorepatterns=", lower):
             return True
         if re.search(r"(?:--runinband|--run-in-band)\b", lower):
