@@ -509,6 +509,50 @@ def test_typescript_suite_required_for_js_and_ts_edits() -> None:
     )
 
 
+def test_ava_commands_count_as_typescript_verification() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        is_full_typescript_suite_command,
+        looks_like_typescript_suite_command,
+        verify_command_targets_agent_authored_tests,
+    )
+
+    task = "Implement grid layout support with grid_template_rows()."
+    agent_tests = frozenset({"grid.tsx", "grid"})
+
+    assert looks_like_verify_command("npx ava")
+    assert looks_like_typescript_suite_command("npx ava")
+    assert is_full_typescript_suite_command("npx ava")
+    assert not is_full_typescript_suite_command("npx ava test/grid.tsx")
+    assert not verify_command_targets_agent_authored_tests("npx ava", agent_tests)
+    assert verify_command_targets_agent_authored_tests(
+        "npx ava test/grid.tsx", agent_tests
+    )
+    assert verify_command_qualifies_for_completion(
+        "npx ava",
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    assert verify_command_qualifies_for_completion(
+        "cd /app && FORCE_COLOR=false npx ava 2>&1 | tail -30",
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    assert not verify_command_qualifies_for_completion(
+        "npx ava test/grid.tsx",
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+
+
 def test_typescript_scope_rejects_agent_only_initialize_tests() -> None:
     from openjiuwen_icode.features.implement_gate import (
         is_full_typescript_suite_command,
@@ -1360,6 +1404,24 @@ def test_full_aiomonitor_instruction_rejects_p2p_pytest() -> None:
         )
         is False
     )
+
+
+def test_eval_execution_rules_are_not_required_prompt_symbols() -> None:
+    from openjiuwen_icode.features.implement_gate import missing_prompt_symbols
+
+    task = (
+        "Implement grid_template_rows().\n\n"
+        "---\n"
+        "Execution rules for this DeepSWE eval:\n"
+        "1. Work only in the repository under evaluation.\n"
+        "2. Prefer `edit_file` and run checks with `bash`.\n"
+    )
+
+    assert extract_required_prompt_symbols(task) == ("grid_template_rows",)
+    assert missing_prompt_symbols(
+        user_text=task,
+        mutation_blob="def grid_template_rows(): ...",
+    ) == ()
 
 
 def test_python_verify_requires_task_scoped_pytest() -> None:

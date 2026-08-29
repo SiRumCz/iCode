@@ -73,6 +73,7 @@ _VERIFY_HINTS = (
     "mypy",
     "ruff check",
     "unittest",
+    "npx ava",
     "vitest",
     "tstyche",
     "pnpm exec vitest",
@@ -822,7 +823,7 @@ def looks_like_verify_command(command: str) -> bool:
     if not subject:
         return False
     lower = subject.lower()
-    if re.search(r"\b(?:vitest|tstyche)\b", lower):
+    if re.search(r"\b(?:ava|vitest|tstyche)\b", lower):
         return True
     if re.search(r"\bjest\b", lower):
         return True
@@ -1067,6 +1068,7 @@ def looks_like_typescript_suite_command(command: str) -> bool:
         "pnpm run test",
         "yarn test",
         "yarn run test",
+        "npx ava",
         "npx jest",
         "npx mocha",
         "npx vitest",
@@ -1077,6 +1079,8 @@ def looks_like_typescript_suite_command(command: str) -> bool:
     if re.search(r"\bjest\b", lower):
         return True
     if re.search(r"\bmocha\b", lower):
+        return True
+    if re.search(r"\bava\b", lower):
         return True
     if re.search(r"\bvitest\b", lower):
         return True
@@ -1100,6 +1104,13 @@ def is_full_typescript_suite_command(command: str) -> bool:
         if re.fullmatch(r"-?-runinband", rest):
             return True
         return False
+    if re.search(r"\b(?:(?:npx|pnpm\s+exec|yarn\s+exec)\s+)?ava\b", lower):
+        match = re.search(
+            r"\b(?:(?:npx|pnpm\s+exec|yarn\s+exec)\s+)?ava\b(.*)$",
+            lower,
+        )
+        rest = (match.group(1) if match else "").strip()
+        return not rest
     if re.search(r"\b(?:npx\s+)?jest\b", lower):
         if re.search(r"\.test\.(?:ts|tsx|js|jsx)\b", lower):
             return False
@@ -1566,6 +1577,7 @@ def _shared_api_stems(text: str, *, min_count: int = 2, min_len: int = 5) -> fro
 
 _SCOPE_COMMAND_STOPWORDS = frozenset(
     {
+        "ava",
         "pytest",
         "python",
         "python3",
@@ -1573,6 +1585,8 @@ _SCOPE_COMMAND_STOPWORDS = frozenset(
         "cargo",
         "compileall",
         "edit_file",
+        "list_files",
+        "read_file",
         "write_file",
         "git",
         "diff",
@@ -1583,6 +1597,15 @@ _SCOPE_COMMAND_STOPWORDS = frozenset(
         "vitest",
         "tsc",
         "eslint",
+    }
+)
+
+_HARNESS_SYMBOL_STOPWORDS = frozenset(
+    {
+        "deepswe",
+        "icode",
+        "openjiuwen",
+        "pier",
     }
 )
 
@@ -2253,6 +2276,9 @@ def extract_required_prompt_symbols(text: str) -> tuple[str, ...]:
     def _add(token: str, *, allow_short: bool = False) -> None:
         tok = _normalize_symbol_token(token)
         if not _is_strong_symbol(tok, allow_short=allow_short):
+            return
+        lower = tok.lower()
+        if lower in _SCOPE_COMMAND_STOPWORDS or lower in _HARNESS_SYMBOL_STOPWORDS:
             return
         if tok not in found:
             found.append(tok)
