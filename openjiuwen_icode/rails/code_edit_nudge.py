@@ -341,9 +341,13 @@ class CodeEditNudgeRail(DeepAgentRail):
             # (npm test / go test loops without a patch). After mutation,
             # successful verify clears the stall; failed verify is not explore.
             if self._workspace_mutated and looks_like_verify_command(cmd):
+                result_payload, parsed_success = tool_result_payload(tool_result)
+                tool_success = getattr(inputs, "tool_success", None)
+                if tool_success is None:
+                    tool_success = parsed_success
                 ok = bash_result_succeeded(
-                    tool_result,
-                    tool_success=getattr(inputs, "tool_success", None),
+                    result_payload,
+                    tool_success=tool_success,
                 )
                 # Track the latest verify result, not whether any earlier
                 # command happened to pass. A later failing broad suite must

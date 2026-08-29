@@ -79,6 +79,15 @@ _VERIFY_HINTS = (
     "pnpm exec vitest",
 )
 
+_PNPM_TEST_COMMAND_RE = re.compile(
+    r"\bpnpm\s+(?:(?:--filter|-f)\s+\S+\s+)?"
+    r"(?:run\s+)?test(?:\s+run)?\b"
+)
+_PNPM_FULL_TEST_COMMAND_RE = re.compile(
+    r"\bpnpm\s+(?:(?:--filter|-f)\s+\S+\s+)?"
+    r"(?:run\s+)?test(?:\s+run)?(?=\s*(?:$|&&|\|\||[|;]))"
+)
+
 _NATIVE_SOURCE_SUFFIXES = (
     ".c",
     ".h",
@@ -842,6 +851,8 @@ def looks_like_verify_command(command: str) -> bool:
     if not subject:
         return False
     lower = subject.lower()
+    if _PNPM_TEST_COMMAND_RE.search(lower):
+        return True
     if re.search(r"\b(?:ava|vitest|tstyche)\b", lower):
         return True
     if re.search(r"\bjest\b", lower):
@@ -1095,6 +1106,8 @@ def looks_like_typescript_suite_command(command: str) -> bool:
     )
     if any(tok in lower for tok in suite):
         return True
+    if _PNPM_TEST_COMMAND_RE.search(lower):
+        return True
     if re.search(r"\bjest\b", lower):
         return True
     if re.search(r"\bmocha\b", lower):
@@ -1113,6 +1126,11 @@ def is_full_typescript_suite_command(command: str) -> bool:
     if not command or not str(command).strip():
         return False
     lower = str(command).lower().strip()
+    # pnpm workspaces commonly expose a package's canonical suite as
+    # ``pnpm -F <package> test run``.  This is broad suite evidence even
+    # though the package selector appears between pnpm and the test script.
+    if _PNPM_FULL_TEST_COMMAND_RE.search(lower):
+        return True
     if re.search(r"\bnpm test\b", lower):
         if re.search(r"\.test\.(?:ts|tsx|js|jsx)\b", lower):
             return False

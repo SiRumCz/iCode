@@ -598,6 +598,43 @@ def test_typescript_scope_rejects_agent_only_initialize_tests() -> None:
     )
 
 
+def test_typescript_gate_accepts_pnpm_package_suites() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        is_full_typescript_suite_command,
+        verify_command_qualifies_for_completion,
+    )
+
+    task = (
+        "Export createFilter for value-based item filtering. "
+        "Filters compose with existing selectors."
+    )
+    core_suite = (
+        "cd /app/packages/core && pnpm vitest run 2>&1 | tail -30"
+    )
+    publish_suite = "cd /app && pnpm -F koota test run"
+
+    # A bare Vitest run can include only an agent-authored test in repos with
+    # narrow config, so keep requiring stronger package-script evidence.
+    assert not is_full_typescript_suite_command(core_suite)
+    assert is_full_typescript_suite_command(publish_suite)
+    assert is_full_typescript_suite_command(
+        "pnpm -F react test run && pnpm -F koota build"
+    )
+    assert not is_full_typescript_suite_command(
+        "pnpm vitest run tests/value-filter.test.ts"
+    )
+    assert verify_command_qualifies_for_completion(
+        publish_suite,
+        native_mutated=False,
+        success=True,
+        typescript_mutated=True,
+        user_text=task,
+        agent_created_test_names=frozenset(
+            {"value-filter.test.ts", "value-filter"}
+        ),
+    )
+
+
 def test_typescript_gate_rejects_plain_js_test_created_under_test_dir() -> None:
     from openjiuwen_icode.features.implement_gate import (
         is_full_typescript_suite_command,

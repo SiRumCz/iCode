@@ -537,6 +537,29 @@ async def test_verify_bash_disables_post_mutation_abort() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verify_bash_reads_success_from_structured_result() -> None:
+    rail = CodeEditNudgeRail(explore_budget=6, explore_abort_cap=8)
+    rail.init(MagicMock())
+    rail._user_text = "Implement link-style in src/rules/link-style.ts"
+    rail._workspace_mutated = True
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "npm test -- --runInBand"},
+                tool_result=SimpleNamespace(
+                    content="Tests: 10 passed",
+                    success=True,
+                ),
+            )
+        )
+    )
+
+    assert rail._verify_succeeded is True
+
+
+@pytest.mark.asyncio
 async def test_failed_suite_after_pass_reenables_text_only_abort() -> None:
     """The latest failed verify must override an earlier passing command."""
     rail = CodeEditNudgeRail(explore_budget=6, explore_abort_cap=8)
