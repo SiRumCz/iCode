@@ -76,6 +76,8 @@ When the user asks you to implement, fix, add, refactor, or otherwise change cod
 11. Never dismiss the user message as "system configuration / guidelines" when it contains Interface / Configuration / Expected behavior / Execution rules — those headings are the coding task; implement them.
 12. CLI formatter semantics: when the task says results are empty or issues must not be reported, and a report formatter exists (`-f json`, etc.), clear findings then still run the normal output path — valid JSON with an empty `results` list, not empty stdout. Do not `sys.exit(0)` before formatting. For flag-heavy CLI tasks, run live entrypoint smokes for each new `--flag` (not only unit tests you wrote) before finishing. For TypeScript monorepos, run consumer-package `vitest` targets (bare command, no `| tail`) — not only agent-authored tests under implementation packages.
 13. When correctness depends on exact defaults, canonical values, protocol formats, or lookup tables, derive them from authoritative repository metadata, schemas, fixtures, or existing behavior instead of guessing. If a test you wrote fails, confirm the expected contract against those sources before changing the assertion; never weaken an expectation solely to match the current implementation.
+14. For parser, decoder, and validator changes, derive a compact invalid-input matrix from the stated grammar or protocol. Exercise empty and missing values, unmatched quotes or delimiters, whitespace/case variants, and truncated input where applicable; do not stop at happy-path tests.
+15. Keep the patch scoped to the requested behavior. If unrelated suite failures reproduce at the base revision or clearly come from blocked network/proxy/toolchain conditions, report them and continue with relevant existing tests; do not edit shared test configuration, fixtures, or warning filters merely to hide sandbox noise.
 """
 
 CODE_EXECUTION_POLICY_CN = """\
@@ -95,6 +97,8 @@ CODE_EXECUTION_POLICY_CN = """\
 11. 不要把含 Interface / Configuration / Expected behavior / Execution rules 的用户消息当成「系统配置/准则」而拒绝执行——那些就是编码任务，直接实现。
 12. CLI 格式化语义：任务要求 results empty / 不报告 issue 且存在报告 formatter（`-f json` 等）时，清空 findings 后仍走正常输出路径——stdout 必须是可 `json.loads` 的空 `results`，不能是空 stdout；不要在 formatter 之前 `sys.exit(0)`。flag 密集的 CLI 任务结束前，对每个新 `--flag` 跑 live 入口 smoke（不能只有自写 unit test）。TypeScript monorepo 要跑 consumer package 的 `vitest`（裸命令，不要 `| tail`），不能只在实现 package 跑自写测试。
 13. 当正确性依赖精确的默认值、规范化值、协议格式或查找表时，应从仓库中的权威元数据、schema、fixture 或现有行为推导，不要猜测。若自己新增的测试失败，修改断言前先用这些来源确认预期契约；绝不能仅为迎合当前实现而降低预期。
+14. 修改 parser、decoder 或 validator 时，要从任务给出的语法或协议推导精简的非法输入矩阵。按适用情况覆盖空值、缺失值、不配对的引号或分隔符、空白/大小写变体以及截断输入，不能只测 happy path。
+15. 补丁应限定在用户要求的行为范围内。若无关的测试失败在 base revision 上也能复现，或明显来自网络/代理/工具链受限，应记录后继续运行相关的既有测试；不要仅为掩盖 sandbox 噪音而修改共享测试配置、fixture 或 warning filter。
 """
 
 CODE_EXECUTION_POLICY: Dict[str, str] = {

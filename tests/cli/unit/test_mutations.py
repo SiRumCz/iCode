@@ -247,6 +247,21 @@ def test_bash_created_test_paths_are_tracked(tmp_path: Path) -> None:
     assert "nosec_directives" in names
 
 
+def test_bash_append_to_existing_test_is_not_tracked_as_created(
+    tmp_path: Path,
+) -> None:
+    ws = tmp_path / "ws"
+    test_file = ws / "tests" / "test_multipart.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text("def test_existing(): pass\n", encoding="utf-8")
+
+    tracker = MutationTracker(tmp_path / "mut", workspace=ws)
+    tracker.begin_turn("s")
+
+    assert tracker.record_bash_created_path(str(test_file)) is None
+    assert tracker.agent_created_test_names() == frozenset()
+
+
 def test_path_under_workspace(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()

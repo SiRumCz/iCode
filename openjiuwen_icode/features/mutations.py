@@ -352,6 +352,10 @@ class MutationTracker:
         rel = str(abs_path)
         if not self._path_under_workspace(rel) or not _is_test_file_path(rel):
             return None
+        # This hook runs before the bash command. Redirection to an existing
+        # test file is an edit/append, not an agent-created test.
+        if abs_path.exists():
+            return None
         for mut in self._current.files:
             if mut.path == rel:
                 return None
