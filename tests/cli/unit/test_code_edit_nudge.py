@@ -534,3 +534,58 @@ async def test_verify_bash_disables_post_mutation_abort() -> None:
             )
         )
     agent.abort.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_suite_after_pass_reenables_text_only_abort() -> None:
+    """The latest failed verify must override an earlier passing command."""
+    rail = CodeEditNudgeRail(explore_budget=6, explore_abort_cap=8)
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail._user_text = "Implement merge strategies in Go"
+    rail._workspace_mutated = True
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "go test ./pkg/chart/common/util/"},
+                tool_result={
+                    "content": "Stdout: ok example/util\nExit Code: 0"
+                },
+                tool_success=True,
+            )
+        )
+    )
+    assert rail._verify_succeeded is True
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "go test ./... 2>&1 | tail -20"},
+                tool_result={
+                    "content": (
+                        "Stdout: FAIL\texample/action [build failed]\n"
+                        "Exit Code: 0"
+                    )
+                },
+                tool_success=True,
+            )
+        )
+    )
+    assert rail._verify_succeeded is False
+
+    await rail.after_model_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                response=SimpleNamespace(
+                    tool_calls=None,
+                    content="All implementation work is complete.",
+                ),
+                messages=[],
+            )
+        )
+    )
+    agent.abort.assert_called_once()

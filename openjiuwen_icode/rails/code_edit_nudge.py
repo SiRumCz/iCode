@@ -345,8 +345,11 @@ class CodeEditNudgeRail(DeepAgentRail):
                     tool_result,
                     tool_success=getattr(inputs, "tool_success", None),
                 )
-                if ok is True:
-                    self._verify_succeeded = True
+                # Track the latest verify result, not whether any earlier
+                # command happened to pass. A later failing broad suite must
+                # re-enable the text-only soft abort so SessionHost can issue
+                # its verify-failed continuation instead of accepting "done".
+                self._verify_succeeded = ok is True
                 return
             if not self._workspace_mutated or looks_like_explore_bash(cmd):
                 await self._count_explore(ctx)
