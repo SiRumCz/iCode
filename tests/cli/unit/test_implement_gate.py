@@ -1020,9 +1020,25 @@ def test_go_scope_rejects_agent_authored_html_tests() -> None:
     assert verify_command_targets_agent_authored_tests(pkg_cmd, agent_tests)
     assert not verify_command_targets_agent_authored_tests(suite_cmd, agent_tests)
     assert is_full_go_suite_command(suite_cmd)
+    assert not is_full_go_suite_command(
+        "go test ./... -run XXXNoMatchXXX -count=1"
+    )
+    assert not is_full_go_suite_command(
+        "go test ./... -skip TestNetwork -count=1"
+    )
+    assert not is_full_go_suite_command(
+        "go build ./... && go test ./parsing/html -run HTML -count=1"
+    )
     assert not is_full_go_suite_command(pkg_cmd)
     assert go_command_matches_task_scope(task, suite_cmd)
     assert go_command_matches_task_scope(task, pkg_cmd)
+    assert not verify_command_qualifies_for_completion(
+        "go test ./... -skip TestNetwork -count=1",
+        native_mutated=False,
+        go_mutated=True,
+        success=True,
+        user_text="",
+    )
     assert not verify_command_qualifies_for_completion(
         pkg_cmd,
         native_mutated=False,

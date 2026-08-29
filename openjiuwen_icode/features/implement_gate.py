@@ -545,9 +545,10 @@ GO_SUITE_NUDGE = (
     "You edited Go sources but have not run a real test suite. "
     "`go build` / `go vet` compile or lint only — they do not run tests, "
     "and tests you wrote this session alone are not enough. Call `bash` now "
-    "with `go test ./... -count=1` (full repo suite) or multiple packages "
-    "you touched, fix failures, and re-run until they pass. Do not verify "
-    "only with `go test` on a package whose *_test.go you just created. "
+    "with `go test ./... -count=1` (full repo suite, without `-run`/`-skip`) "
+    "or multiple packages you touched, fix failures, and re-run until they "
+    "pass. Do not verify only with `go test` on a package whose *_test.go "
+    "you just created. "
     "Do not leave build output binaries in the repo."
 )
 
@@ -1003,21 +1004,44 @@ def looks_like_go_suite_command(command: str) -> bool:
     return bool(re.search(r"\bgo\s+test\b", lower))
 
 
+def _go_test_segments(command: str) -> tuple[str, ...]:
+    """Return individual shell segments that invoke ``go test``."""
+    if not command:
+        return ()
+    segments: list[str] = []
+    for segment in re.split(r"(?:&&|\|\||;|\n)", str(command).lower()):
+        match = re.search(r"\bgo\s+test\b", segment)
+        if match:
+            segments.append(segment[match.start():].strip())
+    return tuple(segments)
+
+
+def _go_test_uses_skip(command: str) -> bool:
+    """Return True when a Go test invocation explicitly excludes tests."""
+    return any(
+        re.search(r"(?:^|\s)--?skip(?:=|\s)", segment)
+        for segment in _go_test_segments(command)
+    )
+
+
 def is_full_go_suite_command(command: str) -> bool:
     """Return True when *command* runs the repo-wide Go test suite.
 
     Single-package ``go test ./pkg/`` runs (including agent-authored
-    ``*_test.go`` in that package) do not count — hidden fail-to-pass tests
-    may only exist at grading time.
+    ``*_test.go`` in that package) and filtered ``-run`` / ``-skip`` commands
+    do not count — hidden fail-to-pass tests may only exist at grading time.
     """
     if not command or not looks_like_go_suite_command(command):
         return False
-    lower = str(command).lower().strip()
-    if "./..." not in lower:
-        return False
-    if re.search(r"[\w./-]+_test\.go\b", lower):
-        return False
-    return True
+    for segment in _go_test_segments(command):
+        if "./..." not in segment:
+            continue
+        if re.search(r"[\w./-]+_test\.go\b", segment):
+            continue
+        if re.search(r"(?:^|\s)--?(?:run|skip)(?:=|\s)", segment):
+            continue
+        return True
+    return False
 
 
 def looks_like_typescript_suite_command(command: str) -> bool:
@@ -1216,6 +1240,10 @@ def verify_command_qualifies_for_completion(
     # Pure-Go edits: require go test, not go build / go vet alone.
     if go_mutated and not native_mutated:
         if not looks_like_go_suite_command(command):
+            return False
+        # A successful command that explicitly skipped tests cannot establish
+        # completion, even when it also names the repo-wide ``./...`` target.
+        if _go_test_uses_skip(command):
             return False
         if verify_command_targets_agent_authored_tests(
             command, agent_created_test_names
