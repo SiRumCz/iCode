@@ -1473,6 +1473,18 @@ def bash_result_succeeded(
 ) -> bool | None:
     """Return True/False for bash exit status, or None if unknown."""
     text = _bash_result_text(result)
+    # Background tools acknowledge a launch before the command exits. Their
+    # tool call succeeded, but the test/build result is still unknown.
+    if (
+        "Exit Code:" not in text
+        and re.search(r"""["']pid["']\s*:\s*\d+""", text)
+        and re.search(
+            r"""["']status["']\s*:\s*["'](?:started|running|pending)["']""",
+            text,
+            re.IGNORECASE,
+        )
+    ):
+        return None
     exit_ok: bool | None = None
     if tool_success is not None:
         exit_ok = bool(tool_success)

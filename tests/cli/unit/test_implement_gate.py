@@ -716,6 +716,14 @@ def test_bash_result_success_detection() -> None:
     assert extract_bash_command_from_result(ok) == "make -j2 python"
 
 
+def test_bash_result_background_launch_is_not_completion() -> None:
+    launch = "{'pid': 3076, 'status': 'started'}"
+    running = '{"pid": 3076, "status": "running"}'
+
+    assert bash_result_succeeded(launch, tool_success=True) is None
+    assert bash_result_succeeded(running, tool_success=True) is None
+
+
 def test_dict_bash_result_preserves_full_suite_command() -> None:
     from openjiuwen_icode.features.implement_gate import (
         is_full_typescript_suite_command,

@@ -249,6 +249,49 @@ async def test_python_pytest_clears_nudge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unrelated_pass_does_not_erase_qualified_verify() -> None:
+    rail = ImplementCompletenessRail()
+    builder = _FakeBuilder()
+    rail.system_prompt_builder = builder
+    rail._user_text = (
+        "Add snapshot support with capture_snapshot. "
+        "Snapshots snapshots snapshots."
+    )
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="edit_file",
+                tool_args={
+                    "file_path": "aiomonitor/monitor.py",
+                    "old_string": "old",
+                    "new_string": "new helper logic\n",
+                },
+            )
+        )
+    )
+    for command in (
+        "pytest -q tests/test_snapshot.py",
+        "pytest -q tests/test_monitor.py",
+    ):
+        await rail.after_tool_call(
+            SimpleNamespace(
+                inputs=SimpleNamespace(
+                    tool_name="bash",
+                    tool_args={"command": command},
+                    tool_result=SimpleNamespace(
+                        success=True,
+                        data=f"Command: {command}\nExit Code: 0",
+                    ),
+                )
+            )
+        )
+
+    await rail.before_model_call(MagicMock())
+    assert "implement_completeness" not in builder.sections
+
+
+@pytest.mark.asyncio
 async def test_unrelated_pytest_keeps_python_nudge() -> None:
     rail = ImplementCompletenessRail()
     builder = _FakeBuilder()

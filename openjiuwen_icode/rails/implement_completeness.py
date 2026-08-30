@@ -373,8 +373,9 @@ class ImplementCompletenessRail(DeepAgentRail):
                             ):
                                 self._typescript_suite_verified = True
                             self._verify_succeeded = True
-                        else:
-                            self._verify_succeeded = False
+                        # A passing narrower or out-of-scope check does not
+                        # invalidate an earlier qualifying verification.
+                        # Mutations and actual command failures reset it.
                     elif ok is False:
                         self._verify_succeeded = False
             return
