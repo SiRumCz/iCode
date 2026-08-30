@@ -82,6 +82,26 @@ _VERIFY_NUDGE_CN = (
     "`pytest` / `go test`）。"
 )
 
+_POST_VERIFY_NUDGE_EN = (
+    "## Post-verification discipline\n"
+    "A verification command already passed for the current worktree. Do not "
+    "rerun the same unchanged command. Ensure the repo's real suite has run, "
+    "then use remaining checks on requirement-derived edge cases or finish. "
+    "Make manual/live probes executable with `assert`, `diff`, or an exact "
+    "exit check so wrong output fails the command; visual inspection alone is "
+    "not verification. If a probe exposes a mismatch, edit it, add a "
+    "regression test, then rerun the targeted and full suites."
+)
+
+_POST_VERIFY_NUDGE_CN = (
+    "## 验证通过后的检查纪律\n"
+    "当前工作区已经通过一个验证命令。不要在没有改动时重复运行同一命令；"
+    "确认仓库真实测试套件已经运行，再把剩余检查用于从需求推导出的边界情况，"
+    "或直接结束。手工/live 探针必须用 `assert`、`diff` 或精确退出码把预期"
+    "变成可执行检查，让错误输出导致命令失败；只目视输出不算验证。若探针发现"
+    "不一致，先修复并添加回归测试，再运行相关测试和全量套件。"
+)
+
 _NO_GREETING_EN = (
     "## Do not greet on implement tasks\n"
     "The user already gave a concrete coding task (including any Interface / "
@@ -387,10 +407,26 @@ class CodeEditNudgeRail(DeepAgentRail):
         if callable(remove):
             remove(_SECTION)
 
+        lang = getattr(builder, "language", "en") or "en"
         if self._verify_succeeded:
+            text = (
+                _POST_VERIFY_NUDGE_CN
+                if str(lang).startswith("zh") or lang == "cn"
+                else _POST_VERIFY_NUDGE_EN
+            )
+            builder.add_section(
+                PromptSection(
+                    name=_SECTION,
+                    content={
+                        "en": _POST_VERIFY_NUDGE_EN,
+                        "cn": _POST_VERIFY_NUDGE_CN,
+                        lang: text,
+                    },
+                    priority=_PRIORITY,
+                )
+            )
             return
 
-        lang = getattr(builder, "language", "en") or "en"
         if self._workspace_mutated:
             if self._explore_count < 1:
                 return

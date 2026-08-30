@@ -79,6 +79,8 @@ class TestBuildSystemPrompt:
         assert "iteration errors close or release" in prompt
         assert "reproduce at the base revision" in prompt
         assert "do not edit shared test configuration" in prompt
+        assert "Do not repeatedly rerun an unchanged passing suite" in prompt
+        assert "Make manual output probes fail mechanically" in prompt
 
     def test_non_code_profile_skips_coding_overlay(self) -> None:
         """Non-code profiles omit coding identity / execution policy."""

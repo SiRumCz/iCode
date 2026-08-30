@@ -537,6 +537,36 @@ async def test_verify_bash_disables_post_mutation_abort() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verify_bash_injects_assertion_based_probe_nudge() -> None:
+    rail = CodeEditNudgeRail(explore_budget=6, explore_abort_cap=8)
+    builder = _FakeBuilder()
+    agent = MagicMock()
+    agent.abort = AsyncMock()
+    rail.init(agent)
+    rail.system_prompt_builder = builder
+    rail._user_text = "Implement CREATE TABLE formatting"
+    rail._workspace_mutated = True
+
+    await rail.after_tool_call(
+        SimpleNamespace(
+            inputs=SimpleNamespace(
+                tool_name="bash",
+                tool_args={"command": "pytest tests/"},
+                tool_result={
+                    "content": "1263 passed in 16.30s\nExit Code: 0"
+                },
+                tool_success=True,
+            )
+        )
+    )
+    await rail.before_model_call(MagicMock())
+
+    assert rail._verify_succeeded is True
+    assert "code_edit_nudge" in builder.sections
+    agent.abort.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_verify_bash_reads_success_from_structured_result() -> None:
     rail = CodeEditNudgeRail(explore_budget=6, explore_abort_cap=8)
     rail.init(MagicMock())
