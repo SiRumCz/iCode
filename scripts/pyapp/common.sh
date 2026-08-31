@@ -237,11 +237,35 @@ pyapp_maybe_override_musl_python() {
     fi
 }
 
+pyapp_has_musl_cc() {
+    # True when a musl cross/native C compiler is on PATH.
+    command -v musl-gcc >/dev/null 2>&1 \
+        || command -v x86_64-linux-musl-gcc >/dev/null 2>&1 \
+        || command -v aarch64-linux-musl-gcc >/dev/null 2>&1
+}
+
+pyapp_native_linux_target() {
+    # Host-arch Linux cargo target. Prefer musl when a musl CC exists;
+    # otherwise use *-linux-gnu so plain ``gcc`` works without sudo/apt.
+    local arch=""
+    case "$(uname -m)" in
+        x86_64) arch="x86_64" ;;
+        aarch64|arm64) arch="aarch64" ;;
+        *) return 1 ;;
+    esac
+    if pyapp_has_musl_cc; then
+        echo "${arch}-unknown-linux-musl"
+    else
+        echo "${arch}-unknown-linux-gnu"
+    fi
+}
+
 pyapp_default_target() {
-    # Echo a cargo target for static Linux builds; empty for host default.
-    case "$(uname -s)-$(uname -m)" in
-        Linux-x86_64) echo "x86_64-unknown-linux-musl" ;;
-        Linux-aarch64|Linux-arm64) echo "aarch64-unknown-linux-musl" ;;
+    # Echo a cargo target for Linux builds; empty for host default (macOS/Windows).
+    case "$(uname -s)" in
+        Linux)
+            pyapp_native_linux_target || echo ""
+            ;;
         *) echo "" ;;
     esac
 }
@@ -265,8 +289,12 @@ pyapp_artifact_stem() {
     # Map cargo target → release artifact basename (without version/installer).
     local target="$1"
     case "$target" in
-        x86_64-unknown-linux-musl) echo "${BINARY_BASENAME}-linux-x86_64" ;;
-        aarch64-unknown-linux-musl) echo "${BINARY_BASENAME}-linux-aarch64" ;;
+        x86_64-unknown-linux-musl|x86_64-unknown-linux-gnu)
+            echo "${BINARY_BASENAME}-linux-x86_64"
+            ;;
+        aarch64-unknown-linux-musl|aarch64-unknown-linux-gnu)
+            echo "${BINARY_BASENAME}-linux-aarch64"
+            ;;
         aarch64-apple-darwin) echo "${BINARY_BASENAME}-macos-aarch64" ;;
         x86_64-apple-darwin) echo "${BINARY_BASENAME}-macos-x86_64" ;;
         x86_64-pc-windows-msvc|x86_64-pc-windows-gnu)
@@ -339,12 +367,30 @@ pyapp_resolve_cpython_url() {
     echo "${url//%2B/+}"
 }
 
+pyapp_host_arch_matches_target() {
+    # True when uname -m matches the arch prefix of a cargo target triple.
+    local target="$1"
+    local host_m
+    host_m="$(uname -m)"
+    case "$target" in
+        x86_64-*)
+            [[ "$host_m" == "x86_64" ]]
+            ;;
+        aarch64-*)
+            [[ "$host_m" == "aarch64" || "$host_m" == "arm64" ]]
+            ;;
+        *) return 1 ;;
+    esac
+}
+
 pyapp_host_can_build_target() {
+    # Native builds only: same OS + same CPU. Cross-arch Linux needs Docker
+    # (or an explicit musl cross toolchain); do not claim we can build it.
     local target="$1"
     case "$target" in
-        x86_64-unknown-linux-musl|aarch64-unknown-linux-musl)
-            [[ "$(uname -s)" == "Linux" ]] && return 0
-            return 1
+        *-unknown-linux-musl|*-unknown-linux-gnu)
+            [[ "$(uname -s)" == "Linux" ]] || return 1
+            pyapp_host_arch_matches_target "$target"
             ;;
         aarch64-apple-darwin|x86_64-apple-darwin)
             [[ "$(uname -s)" == "Darwin" ]] && return 0

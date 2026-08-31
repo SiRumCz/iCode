@@ -22,11 +22,11 @@ Optional:
 ./scripts/pyapp/build.sh --target x86_64-unknown-linux-musl
 ```
 
-## Release (version bump + macOS packages by default)
+## Release (version bump + host packages)
 
 ```bash
 # Bump patch, unify CLI + VS Code extension versions, commit, tag, push, build
-# (macOS binaries only — no Docker Linux cross-compile)
+# Darwin: macOS binaries. Linux: pass --linux for host binary.
 ./scripts/pyapp/release.sh
 
 # Keep current version (no bump commit); still tag HEAD as vX.Y.Z and push
@@ -37,7 +37,10 @@ Optional:
 ./scripts/pyapp/release.sh --no-bump --full
 ./scripts/pyapp/build-full.sh                  # current host only
 
-# Also build Linux musl via Docker (optional; can hit ring/musl SIGSEGV on
+# Linux host: native arch only (no Docker, no musl-tools required — falls back to gnu)
+./scripts/pyapp/release.sh --no-bump --linux --no-docker --full
+
+# Linux musl for both arches via Docker (optional; can hit ring/musl SIGSEGV on
 # broken aarch64 cross GCC — prefer native arm64 Docker runners)
 ./scripts/pyapp/release.sh --no-bump --linux --docker
 ./scripts/pyapp/build-multi.sh --platform linux --package
@@ -78,8 +81,9 @@ and GitHub Releases. `release.sh` pushes HEAD and all tags to both.
 | `icode-<os>-<arch>-full-v<ver>.tar.gz` | Full offline; deps preinstalled at build time |
 
 Artifacts land in `dist/release/` (override with `--out-dir`). Windows is not
-built here. Default `release.sh` builds **macOS only** (native Darwin host).
-Pass `--linux --docker` when you also want Linux musl images.
+built here. On **Darwin**, default builds are macOS-only. On **Linux**, pass
+`--linux --no-docker` for the host arch (uses `*-linux-gnu` when `musl-gcc` is
+missing), or `--linux --docker` for both musl arches.
 
 End-user instructions are in [`使用说明.md`](./使用说明.md). That file is
 copied into `dist/release/` and into each `.tar.gz` / `.zip` next to the

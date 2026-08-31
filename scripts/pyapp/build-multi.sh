@@ -140,6 +140,13 @@ docker_platform_for_target() {
 
 build_native() {
     local target="$1"
+    # Without musl-tools, cargo *-linux-musl builds fail looking for musl-gcc.
+    # Fall back to the matching gnu triple (system gcc) so --no-docker works.
+    if [[ "$target" == *-unknown-linux-musl ]] && ! pyapp_has_musl_cc; then
+        local arch="${target%%-unknown-linux-musl}"
+        target="${arch}-unknown-linux-gnu"
+        pyapp_log "No musl-gcc on PATH; falling back to ${target}"
+    fi
     local args=(--skip-wheel --target "$target")
     [[ "$USE_UV" == "true" ]] && args+=(--uv)
     "$SCRIPT_DIR/build.sh" "${args[@]}"

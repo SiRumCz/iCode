@@ -98,14 +98,20 @@ Git:
 Build:
   --uv                       Use uv installer in slim PyApp binaries
   --full                     Also build full-deps offline binaries (*-full-*)
-  --linux                    Also build Linux musl targets (Docker by default)
+  --linux                    Build Linux targets (Docker by default for both
+                             arches; with --no-docker: host arch only)
   --docker                   Use Docker for Linux targets (implies --linux)
-  --no-docker                Linux without Docker (native musl only; with --linux)
+  --no-docker                Native Linux only (host arch; musl if available,
+                             else gnu / system gcc). Implies nothing alone —
+                             pass with --linux
   --skip-build               Only handle version / commit / tag / push
   --out-dir DIR              Collect artifacts here (default: dist/release)
   --dry-run                  Show plan only
 
-  Default: macOS binaries only (no Docker cross-compile).
+  Default targets follow the host OS:
+    Darwin  → macOS arm64 + x86_64
+    Linux   → host-arch Linux only (pass --linux; use --docker for both arches)
+    other   → no OS binaries (wheel / vsix still built)
 
 Remotes (defaults):
   origin                     GitCode primary (development)
@@ -115,6 +121,7 @@ Examples:
   ./scripts/pyapp/release.sh
   ./scripts/pyapp/release.sh --no-bump
   ./scripts/pyapp/release.sh --no-bump --full
+  ./scripts/pyapp/release.sh --no-bump --linux --no-docker --full
   ./scripts/pyapp/release.sh --no-bump --linux --docker
   ./scripts/pyapp/release.sh --version 0.2.0
   ./scripts/pyapp/release.sh --bump minor --out-dir dist/release-0.2.0
@@ -833,19 +840,64 @@ if [[ "$SKIP_BUILD" == "true" ]]; then
     exit 0
 fi
 
-# ── Build macOS (default); optional Linux with --linux ─
+# ── Select cargo targets for this host ───────────────────────────────
 pyapp_require_cmd curl perl cargo
-# Default: native macOS only — avoid Docker aarch64/x86_64 musl cross builds
-# (ring + aarch64-linux-musl-gcc often SIGSEGV on cross toolchains).
-RELEASE_TARGETS="aarch64-apple-darwin,x86_64-apple-darwin"
-if [[ "$BUILD_LINUX" == "true" ]]; then
-    RELEASE_TARGETS="x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,${RELEASE_TARGETS}"
-    # --linux defaults to Docker unless the user passed --no-docker.
-    if [[ "$DOCKER_SET" != "true" ]]; then
-        USE_DOCKER=true
-    fi
+
+# --linux defaults to Docker unless the user passed --no-docker / --docker.
+if [[ "$BUILD_LINUX" == "true" && "$DOCKER_SET" != "true" ]]; then
+    USE_DOCKER=true
 fi
-BUILD_ARGS=(--package --targets "$RELEASE_TARGETS")
+
+HOST_OS="$(uname -s)"
+RELEASE_TARGETS=""
+case "$HOST_OS" in
+    Darwin)
+        RELEASE_TARGETS="aarch64-apple-darwin,x86_64-apple-darwin"
+        if [[ "$BUILD_LINUX" == "true" ]]; then
+            if [[ "$USE_DOCKER" == "true" ]]; then
+                RELEASE_TARGETS="x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,${RELEASE_TARGETS}"
+            else
+                echo "Warning: --linux --no-docker on macOS cannot build Linux binaries; skipping Linux targets (use --docker)." >&2
+            fi
+        fi
+        ;;
+    Linux)
+        if [[ "$BUILD_LINUX" != "true" ]]; then
+            # On Linux, --full / default release should still produce a host binary.
+            # Require an explicit --linux to avoid surprising cross-OS users who
+            # only wanted tag/vsix — but document that Linux hosts need --linux.
+            pyapp_log "Host is Linux; pass --linux to build native Linux binaries"
+            RELEASE_TARGETS=""
+        elif [[ "$USE_DOCKER" == "true" ]]; then
+            RELEASE_TARGETS="x86_64-unknown-linux-musl,aarch64-unknown-linux-musl"
+        else
+            # Native only: this machine's arch. Fall back to gnu when musl-gcc
+            # is missing (common without sudo apt install musl-tools).
+            native_t="$(pyapp_native_linux_target)" \
+                || pyapp_die "unsupported Linux arch $(uname -m) for native PyApp build"
+            RELEASE_TARGETS="$native_t"
+            if [[ "$native_t" == *-gnu ]]; then
+                pyapp_log "No musl-gcc on PATH; using ${native_t} (system gcc)"
+            fi
+        fi
+        ;;
+    *)
+        if [[ "$BUILD_LINUX" == "true" ]]; then
+            echo "Warning: --linux is only supported on Linux or Darwin+Docker hosts" >&2
+        fi
+        RELEASE_TARGETS=""
+        ;;
+esac
+
+if [[ -z "$RELEASE_TARGETS" ]]; then
+    pyapp_log "No OS binary targets selected for this host (wheel / vsix may still build)"
+    BUILD_ARGS=(--package --targets "")
+    # build-multi with empty targets dies; skip binary build and continue to vsix.
+    SKIP_OS_BINARIES=true
+else
+    SKIP_OS_BINARIES=false
+    BUILD_ARGS=(--package --targets "$RELEASE_TARGETS")
+fi
 [[ "$USE_UV" == "true" ]] && BUILD_ARGS+=(--uv)
 [[ "$BUILD_FULL" == "true" ]] && BUILD_ARGS+=(--full)
 [[ "$USE_DOCKER" != "true" ]] && BUILD_ARGS+=(--no-docker)
@@ -854,23 +906,42 @@ BUILD_ARGS=(--package --targets "$RELEASE_TARGETS")
 export PROJECT_VERSION="$NEW_VERSION"
 
 echo
-if [[ "$BUILD_LINUX" == "true" ]]; then
+if [[ "$SKIP_OS_BINARIES" == "true" ]]; then
+    pyapp_log "Skipping OS binary build; packaging wheel + extension only..."
+elif [[ "$BUILD_LINUX" == "true" && "$HOST_OS" == "Linux" && "$USE_DOCKER" != "true" ]]; then
     if [[ "$BUILD_FULL" == "true" ]]; then
-        pyapp_log "Building macOS + Linux binaries (slim + full)..."
+        pyapp_log "Building native Linux binary (slim + full): ${RELEASE_TARGETS}"
     else
-        pyapp_log "Building macOS + Linux binaries (slim only; pass --full for offline bundles)..."
+        pyapp_log "Building native Linux binary (slim): ${RELEASE_TARGETS}"
+    fi
+elif [[ "$BUILD_LINUX" == "true" ]]; then
+    if [[ "$BUILD_FULL" == "true" ]]; then
+        pyapp_log "Building release binaries (slim + full): ${RELEASE_TARGETS}"
+    else
+        pyapp_log "Building release binaries (slim): ${RELEASE_TARGETS}"
     fi
 elif [[ "$BUILD_FULL" == "true" ]]; then
-    pyapp_log "Building macOS binaries only (slim + full; pass --linux for Linux)..."
+    pyapp_log "Building release binaries (slim + full): ${RELEASE_TARGETS}"
 else
-    pyapp_log "Building macOS binaries only (slim; pass --linux for Linux, --full for offline)..."
+    pyapp_log "Building release binaries (slim): ${RELEASE_TARGETS}"
 fi
-set +e
-"$SCRIPT_DIR/build-multi.sh" "${BUILD_ARGS[@]}"
-build_rc=$?
-set -e
-if [[ "$build_rc" -ne 0 ]]; then
-    echo "Warning: build-multi.sh exited ${build_rc}; collecting whatever artifacts exist..." >&2
+
+build_rc=0
+if [[ "$SKIP_OS_BINARIES" == "true" ]]; then
+    # Still produce a wheel for the release dir / pip users.
+    pyapp_build_wheel
+    mkdir -p "$PROJECT_ROOT/dist/release"
+    wheel="$(pyapp_resolve_wheel "$NEW_VERSION")"
+    cp -f "$wheel" "$PROJECT_ROOT/dist/release/"
+    pyapp_stage_usage_doc "$PROJECT_ROOT/dist/release"
+else
+    set +e
+    "$SCRIPT_DIR/build-multi.sh" "${BUILD_ARGS[@]}"
+    build_rc=$?
+    set -e
+    if [[ "$build_rc" -ne 0 ]]; then
+        echo "Warning: build-multi.sh exited ${build_rc}; collecting whatever artifacts exist..." >&2
+    fi
 fi
 
 # build-multi packages into dist/release; gather/normalize into OUT_DIR.
@@ -914,9 +985,17 @@ ARTIFACTS=(
     "$OUT_DIR"/*.whl
     "$OUT_DIR"/icode-*.vsix
 )
+LINUX_BINS=("$OUT_DIR"/${BINARY_BASENAME}-linux-*)
+MACOS_BINS=("$OUT_DIR"/${BINARY_BASENAME}-macos-*)
 shopt -u nullglob
 if [[ ${#ARTIFACTS[@]} -eq 0 ]]; then
-    pyapp_die "no macOS/extension release artifacts found in $OUT_DIR (pass --linux for Linux targets)"
+    pyapp_die "no release artifacts found in $OUT_DIR"
+fi
+if [[ "$BUILD_LINUX" == "true" && ${#LINUX_BINS[@]} -eq 0 ]]; then
+    pyapp_die " --linux was set but no Linux binaries landed in $OUT_DIR (native build failed?)"
+fi
+if [[ "$HOST_OS" == "Darwin" && "$BUILD_LINUX" != "true" && ${#MACOS_BINS[@]} -eq 0 ]]; then
+    pyapp_die "no macOS binaries found in $OUT_DIR"
 fi
 
 pyapp_log "Release ready: v${NEW_VERSION}"
