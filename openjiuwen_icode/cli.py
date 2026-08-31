@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import warnings
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -22,6 +23,22 @@ import click
 from openjiuwen_icode import __version__
 from openjiuwen_icode.agent.config import load_config
 from openjiuwen_icode.branding import PRODUCT_NAME
+
+_third_party_warnings_suppressed = False
+
+
+def _suppress_third_party_syntax_warnings() -> None:
+    """Hide harmless SyntaxWarnings from stale transitive deps on Python 3.13+."""
+    global _third_party_warnings_suppressed
+    if _third_party_warnings_suppressed:
+        return
+    # pysbd 0.3.x uses non-raw regex strings (``'\s'``, ``'\.'``) that 3.13 warns on.
+    warnings.filterwarnings(
+        "ignore",
+        category=SyntaxWarning,
+        module=r"pysbd(\..*)?",
+    )
+    _third_party_warnings_suppressed = True
 
 
 def _bootstrap_logging() -> None:
@@ -450,6 +467,7 @@ def _run_interactive_with_setup(
 @click.pass_context
 def cli(ctx: click.Context, **kwargs: Any) -> None:
     """OpenJiuWen \u2014 terminal interactive AI programming assistant."""
+    _suppress_third_party_syntax_warnings()
     ctx.ensure_object(dict)
     ctx.obj["opts"] = CLIOptions(
         model=kwargs.get("model"),
@@ -1786,4 +1804,5 @@ def auto_harness_history(
 
 def pyapp_main() -> None:
     """PyApp binary entrypoint; preserves integer CLI return codes."""
+    _suppress_third_party_syntax_warnings()
     raise SystemExit(cli.main(standalone_mode=True))
