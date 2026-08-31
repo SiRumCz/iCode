@@ -67,6 +67,42 @@ pyapp_build_wheel() {
     )
 }
 
+pyapp_install_full_runtime() {
+    # Install the same runtime closure as ``uv sync`` into an embedded CPython
+    # prefix, then overlay the local product wheel without re-resolving deps.
+    #
+    # Args: PYTHON_BIN WHEEL_ABS WORK_DIR
+    #
+    # ``uv pip install <wheel>`` alone pulls ``openjiuwen`` from PyPI (often a
+    # newer build than the git fork in pyproject/uv.lock) and can miss optional
+    # imports such as ``opentelemetry.sdk``. Prefer uv.lock when present.
+    local python_bin="$1"
+    local wheel_abs="$2"
+    local work_dir="$3"
+    local req_file="$work_dir/full-requirements.txt"
+    local lock_file="$PROJECT_ROOT/uv.lock"
+
+    if [[ -f "$lock_file" ]]; then
+        pyapp_log "Installing locked runtime deps from uv.lock into embedded CPython..."
+        (
+            cd "$PROJECT_ROOT"
+            uv export --frozen --no-dev --no-emit-project --no-hashes -o "$req_file"
+        )
+        uv pip install --python "$python_bin" -r "$req_file"
+        pyapp_log "Installing ${PYAPP_PROJECT_NAME} wheel (no-deps overlay)..."
+        uv pip install --python "$python_bin" --no-deps "$wheel_abs"
+        return 0
+    fi
+
+    echo "Warning: uv.lock missing; falling back to wheel-only install (openjiuwen may come from PyPI)." >&2
+    if [[ -n "${PYAPP_PROJECT_FEATURES}" ]]; then
+        uv pip install --python "$python_bin" \
+            "${PYAPP_PROJECT_NAME}[${PYAPP_PROJECT_FEATURES}] @ ${wheel_abs}"
+    else
+        uv pip install --python "$python_bin" "$wheel_abs"
+    fi
+}
+
 pyapp_resolve_wheel() {
     # Wheel filenames normalize hyphens in the dist name to underscores
     # (PEP 427), e.g. openjiuwen-icode → openjiuwen_icode-…-py3-none-any.whl.

@@ -104,16 +104,10 @@ else
     pyapp_die "could not find python binary under $PYTHON_PREFIX"
 fi
 
-pyapp_log "Installing ${PYAPP_PROJECT_NAME}[${PYAPP_PROJECT_FEATURES}] + all deps into embedded CPython..."
-# Build-time install (needs network / mirror). Runtime will PYAPP_SKIP_INSTALL.
+# Build-time install (needs network / mirror + git SSH for openjiuwen fork).
+# Runtime will PYAPP_SKIP_INSTALL.
 WHEEL_ABS="${PYAPP_DIR}/${WHEEL}"
-if [[ -n "${PYAPP_PROJECT_FEATURES}" ]]; then
-    # PEP 508 direct reference with extras.
-    UV_SPEC="${PYAPP_PROJECT_NAME}[${PYAPP_PROJECT_FEATURES}] @ ${WHEEL_ABS}"
-else
-    UV_SPEC="${WHEEL_ABS}"
-fi
-uv pip install --python "$PYTHON_BIN" "$UV_SPEC"
+pyapp_install_full_runtime "$PYTHON_BIN" "$WHEEL_ABS" "$BUILD_DIR"
 
 pyapp_log "Re-archiving preinstalled distribution..."
 DIST_ARCHIVE="$PYAPP_DIR/icode-full-python.tar.gz"
