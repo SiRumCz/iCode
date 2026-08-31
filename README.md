@@ -14,6 +14,8 @@ branch `icode` (not upstream `main` / PyPI alone).
 
 ## Install
 
+### From source (development)
+
 ```bash
 # From this repo (resolves openjiuwen from the fork via [tool.uv.sources]):
 cd iCode
@@ -23,6 +25,33 @@ uv sync   # requires SSH access to gitcode.com:michaelling/agent-core
 `[tool.uv.sources]` points `openjiuwen` at
 `ssh://git@gitcode.com/michaelling/agent-core.git` (`branch = "icode"`);
 `uv.lock` pins the resolved commit.
+
+### Release packages (no local Python)
+
+GitCode Releases publish standalone **`icode`** binaries (and related assets).
+You do **not** need a system Python install.
+
+| Artifact | What it is | When to use |
+|----------|------------|-------------|
+| `icode-<os>-<arch>-full-vX.Y.Z.tar.gz` | **Full** offline binary: CPython + product wheel + all third-party deps baked in | **Recommended** for end users / air-gapped hosts |
+| `icode-<os>-<arch>-vX.Y.Z.tar.gz` | **Slim** binary: CPython + product wheel only; first launch installs deps from PyPI | Smaller download when you have reliable network |
+| `openjiuwen_icode-*-py3-none-any.whl` | Pip wheel | Developers who already manage a Python env |
+| `icode-X.Y.Z.vsix` | VS Code / OpenVSX extension | Editor integration (same version as the CLI) |
+| `SHA256SUMS.txt` | Checksums | Verify downloads |
+| `使用说明.md` | End-user guide (also inside each `.tar.gz`) | How to pick / run a package |
+
+Platform tokens in the filename: `linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`.
+
+**Prefer the `-full-` archive.** Slim first-run talks to PyPI and may not match this repo’s git-pinned `openjiuwen` fork. Full embeds the lockfile closure at build time and runs offline after unpack.
+
+```bash
+# Example (Linux x86_64 full)
+tar -xzf icode-linux-x86_64-full-v0.1.38.tar.gz
+./icode --help
+./icode tui
+```
+
+More detail: [`scripts/pyapp/使用说明.md`](scripts/pyapp/使用说明.md) (shipped with every binary release) and packaging notes in [`scripts/pyapp/README.md`](scripts/pyapp/README.md).
 
 ### Local joint debug (SDK + product)
 

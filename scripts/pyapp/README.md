@@ -77,8 +77,14 @@ and GitHub Releases. `release.sh` pushes HEAD and all tags to both.
 
 | Artifact name | Meaning |
 |---------------|---------|
-| `icode-<os>-<arch>-v<ver>.tar.gz` | Slim PyApp; first run installs deps from PyPI |
-| `icode-<os>-<arch>-full-v<ver>.tar.gz` | Full offline; deps preinstalled at build time |
+| `icode-<os>-<arch>-full-v<ver>.tar.gz` | **Full** offline binary (recommended): deps from `uv.lock` preinstalled |
+| `icode-<os>-<arch>-v<ver>.tar.gz` | **Slim** PyApp; first run installs deps from PyPI |
+| `openjiuwen_icode-*-py3-none-any.whl` | Pip wheel for developers |
+| `icode-<ver>.vsix` | VS Code / OpenVSX extension (same release version) |
+| `SHA256SUMS.txt` | Checksums for the release directory |
+| `使用说明.md` | End-user guide (also packed next to `icode` inside each archive) |
+
+**End users should download the `-full-` archive** for their OS/arch. Slim is smaller but needs network on first launch and may resolve a different `openjiuwen` than the git-pinned fork used in this repo.
 
 Artifacts land in `dist/release/` (override with `--out-dir`). Windows is not
 built here. On **Darwin**, default builds are macOS-only. On **Linux**, pass
