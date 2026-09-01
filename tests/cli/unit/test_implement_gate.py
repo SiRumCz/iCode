@@ -1930,16 +1930,22 @@ def test_effect_sse_rejects_agent_test_and_accepts_consumer_suite() -> None:
     from openjiuwen_icode.features.implement_gate import (
         is_full_typescript_suite_command,
         post_verify_contract_pending_items,
+        typescript_monorepo_directory_verify_matches,
         typescript_monorepo_integration_verify_matches,
         typescript_wrong_package_only,
         verify_command_qualifies_for_completion,
+        wire_format_contract_pending_items,
+        wire_format_evidence_satisfied,
     )
 
     wrong = "npx vitest run --project @effect/platform test/HttpApiSSE.test.ts"
     agent_only = (
         "npx vitest run --project @effect/platform-node test/HttpApiSSE.test.ts"
     )
-    consumer_suite = "npx vitest run --project @effect/platform-node"
+    bare_project = "npx vitest run --project @effect/platform-node"
+    consumer_dir = (
+        "npx vitest run --project @effect/platform-node packages/platform-node/test"
+    )
     agent_tests = frozenset({"HttpApiSSE.test.ts", "httpapisse.test.ts"})
 
     assert typescript_wrong_package_only(wrong, EFFECT_SSE_TASK)
@@ -1949,11 +1955,21 @@ def test_effect_sse_rejects_agent_test_and_accepts_consumer_suite() -> None:
     assert typescript_monorepo_integration_verify_matches(
         EFFECT_SSE_TASK, agent_only
     )
-    assert typescript_monorepo_integration_verify_matches(
-        EFFECT_SSE_TASK, consumer_suite
+    assert not typescript_monorepo_integration_verify_matches(
+        EFFECT_SSE_TASK, bare_project
+    )
+    assert typescript_monorepo_directory_verify_matches(
+        EFFECT_SSE_TASK, consumer_dir
+    )
+    assert not typescript_monorepo_directory_verify_matches(
+        EFFECT_SSE_TASK, agent_only
+    )
+    assert not typescript_monorepo_directory_verify_matches(
+        EFFECT_SSE_TASK, bare_project
     )
     assert not is_full_typescript_suite_command(agent_only)
-    assert is_full_typescript_suite_command(consumer_suite)
+    assert not is_full_typescript_suite_command(bare_project)
+    assert is_full_typescript_suite_command(consumer_dir)
     assert not verify_command_qualifies_for_completion(
         wrong,
         native_mutated=False,
@@ -1970,8 +1986,16 @@ def test_effect_sse_rejects_agent_test_and_accepts_consumer_suite() -> None:
         user_text=EFFECT_SSE_TASK,
         agent_created_test_names=agent_tests,
     )
+    assert not verify_command_qualifies_for_completion(
+        bare_project,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=EFFECT_SSE_TASK,
+        agent_created_test_names=agent_tests,
+    )
     assert verify_command_qualifies_for_completion(
-        consumer_suite,
+        consumer_dir,
         native_mutated=False,
         typescript_mutated=True,
         success=True,
@@ -1980,8 +2004,17 @@ def test_effect_sse_rejects_agent_test_and_accepts_consumer_suite() -> None:
     )
     pending = post_verify_contract_pending_items(EFFECT_SSE_TASK, (wrong,))
     assert any("platform-node" in line for line in pending)
+    # Bare --project must NOT clear monorepo or wire-format contracts.
+    bare_pending = post_verify_contract_pending_items(
+        EFFECT_SSE_TASK, (bare_project,)
+    )
+    assert bare_pending
+    assert any("platform-node" in line or "directory" in line.lower() for line in bare_pending)
+    assert wire_format_contract_pending_items(EFFECT_SSE_TASK, (bare_project,))
+    assert not wire_format_evidence_satisfied(EFFECT_SSE_TASK, (bare_project,))
+    assert wire_format_evidence_satisfied(EFFECT_SSE_TASK, (consumer_dir,))
     assert (
-        post_verify_contract_pending_items(EFFECT_SSE_TASK, (consumer_suite,))
+        post_verify_contract_pending_items(EFFECT_SSE_TASK, (consumer_dir,))
         == ()
     )
 
@@ -1990,9 +2023,60 @@ def test_wire_format_contract_pending_for_effect_sse() -> None:
     from openjiuwen_icode.features.implement_gate import (
         wire_format_contract_pending_items,
         wire_format_contract_task,
+        wire_format_evidence_satisfied,
     )
 
     assert wire_format_contract_task(EFFECT_SSE_TASK)
     pending = wire_format_contract_pending_items(EFFECT_SSE_TASK, ())
     assert any("data:" in line for line in pending)
     assert any("text/event-stream" in line.lower() or "toResponse" in line for line in pending)
+    # Agent-named file under consumer project still leaves wire-format pending.
+    agent_file = (
+        "npx vitest run --project @effect/platform-node test/HttpApiSSE.test.ts"
+    )
+    assert wire_format_contract_pending_items(EFFECT_SSE_TASK, (agent_file,))
+    assert not wire_format_evidence_satisfied(EFFECT_SSE_TASK, (agent_file,))
+
+
+def test_adversarial_contracts_for_near_miss_specs() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        adversarial_contract_pending_items,
+        adversarial_contract_task,
+        looks_like_oom_or_killed_verify,
+        next_implement_continuation,
+        VERIFY_KILLED_NUDGE,
+    )
+
+    dateutil = (
+        "Add RFC5545 timezone interop for rrule with TZID and tzical zones."
+    )
+    assert adversarial_contract_task(dateutil)
+    pending = adversarial_contract_pending_items(dateutil, ())
+    assert any("TZID" in line or "tzical" in line for line in pending)
+    assert (
+        adversarial_contract_pending_items(dateutil, ("pytest -k tzical",))
+        == ()
+    )
+
+    csstree = "Implement expandShorthand/compressShorthand for background-size."
+    assert any(
+        "auto auto" in line
+        for line in adversarial_contract_pending_items(csstree, ())
+    )
+
+    assert looks_like_oom_or_killed_verify(None, exit_code=137)
+    assert looks_like_oom_or_killed_verify("Exit Code: 137\nKilled")
+    assert (
+        next_implement_continuation(
+            user_text="Add typed bindings in anko vm.",
+            mutate_attempted=True,
+            verify_attempted=True,
+            verify_succeeded=False,
+            submit_attempted=False,
+            shallow_only=False,
+            go_mutated=True,
+            go_suite_verified=False,
+            verify_killed=True,
+        )
+        == VERIFY_KILLED_NUDGE
+    )

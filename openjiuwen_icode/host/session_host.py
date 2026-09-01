@@ -278,6 +278,7 @@ class SessionHost:
         mutate_attempted = False
         verify_attempted = False
         verify_succeeded = False
+        verify_killed = False
         submit_attempted = False
         shallow_only = True
         integration_attempted = False
@@ -327,6 +328,7 @@ class SessionHost:
                 is_fatal_provider_error,
                 looks_like_implement_task,
                 looks_like_native_build_command,
+                looks_like_oom_or_killed_verify,
                 looks_like_go_suite_command,
                 looks_like_python_suite_command,
                 looks_like_typescript_suite_command,
@@ -405,6 +407,7 @@ class SessionHost:
                     any_tool_attempted=any_tool_attempted,
                     bash_commands=tuple(bash_commands),
                     suite_verify_without_mutation=suite_verify_without_mutation,
+                    verify_killed=verify_killed,
                 )
 
             def _empty_worktree_nudge(*, stream_saw_tool: bool) -> str:
@@ -584,6 +587,7 @@ class SessionHost:
                                                 ):
                                                     typescript_suite_verified = True
                                                 verify_succeeded = True
+                                                verify_killed = False
                                                 if mutated_since_qualifying_verify:
                                                     suite_verify_without_mutation = 1
                                                     mutated_since_qualifying_verify = False
@@ -602,6 +606,10 @@ class SessionHost:
                                                     typescript_suite_passed_unqualified = True
                                         elif ok is False:
                                             verify_succeeded = False
+                                            if looks_like_oom_or_killed_verify(
+                                                ev.result
+                                            ):
+                                                verify_killed = True
                                     if looks_like_submit_command(cmd):
                                         submit_attempted = True
                                 if self._mutations:
