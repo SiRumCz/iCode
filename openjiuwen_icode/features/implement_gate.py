@@ -592,8 +592,8 @@ TS_SUITE_NUDGE = (
     "`tsc --noEmit`, `npm run build`, or typecheck-only commands are not "
     "enough. Do not treat test files you wrote this session as sufficient "
     "verification — run the project's real integration tests via `bash` "
-    "(Effect monorepos: `npx vitest run --project @effect/platform-node "
-    "packages/platform-node/test` or the consumer path named in the task; "
+    "(monorepos: consumer/runtime package suite, e.g. "
+    "`npx vitest run --project <consumer-pkg> packages/<consumer>/test`; "
     "Deno repos: `deno task test`; Node repos: "
     "`npm test` or `npx vitest run`) without piping through `tail`/`grep`, "
     "fix failures, and re-run until they pass before finishing."
@@ -605,8 +605,8 @@ TS_INSUFFICIENT_VERIFY_NUDGE_TEMPLATE = (
     "re-run the same command, make empty touch commits, or tweak comments "
     "to \"force a diff\". Instead: (1) run the repo's canonical or "
     "consumer-package suite without piping through `head`/`tail`/`grep` "
-    "(for Effect SSE: `npx vitest run --project @effect/platform-node "
-    "packages/platform-node/test` — bare `--project` alone is not enough; "
+    "(for monorepos: `npx vitest run --project <consumer-pkg> "
+    "packages/<consumer>/test` — bare `--project` alone is not enough; "
     "otherwise `npm test` / `pnpm exec vitest run`); a targeted test file "
     "created during this turn cannot qualify as the final verification; "
     "(2) ensure chainable methods the user named are wired on real runtime "
@@ -714,7 +714,7 @@ def is_headless_task_enveloped(text: str) -> bool:
 def wrap_headless_implement_prompt(text: str) -> str:
     """Prefix implement-looking headless prompts with an unambiguous task envelope.
 
-    Weak models often misread DeepSWE / Pier specs that contain
+    Weak models often misread headless specs that contain headings like
     ``## Configuration`` or trailing ``Execution rules`` as system setup and
     reply with greetings. The envelope forces ``-t`` content to be treated as
     the sole coding task.
@@ -1198,7 +1198,7 @@ def is_full_typescript_suite_command(command: str) -> bool:
             return False
         # Bare ``--project <pkg>`` alone is not a full suite for monorepo
         # integration tasks — require a package test directory / path hint
-        # (for example ``packages/platform-node/test``).
+        # (for example ``packages/<runtime-pkg>/test``).
         if re.search(
             r"(?:^|\s)(?:packages?/[\w@./-]+/tests?|[\w./-]+/tests?)(?:\s|$)",
             lower,
@@ -2048,6 +2048,78 @@ def cli_contract_nudge(
 POST_VERIFY_CONTRACT_NUDGE_PREFIX = CLI_CONTRACT_NUDGE_PREFIX
 
 
+_CONSUMER_PACKAGE_SUFFIXES = (
+    "-node",
+    "-bun",
+    "-deno",
+    "-browser",
+    "-edge",
+    "-worker",
+    "-react-native",
+    "-next",
+    "-vue",
+    "-svelte",
+)
+
+
+def _npm_packages_mentioned(text: str) -> tuple[str, ...]:
+    """Return distinct ``@scope/name`` package ids mentioned in *text*."""
+    found: list[str] = []
+    for m in re.finditer(r"@[\w-]+/[\w.-]+", text or ""):
+        pkg = m.group(0)
+        if pkg not in found:
+            found.append(pkg)
+    return tuple(found)
+
+
+def _is_consumer_runtime_package(package: str) -> bool:
+    """Heuristic: runtime/integration packages vs library implementation packages."""
+    name = (package or "").rsplit("/", 1)[-1].lower()
+    return any(name.endswith(suf) for suf in _CONSUMER_PACKAGE_SUFFIXES)
+
+
+def _package_path_hint(package: str) -> str:
+    """Derive a ``packages/<name>/test``-style path hint from an npm package id."""
+    name = package.rsplit("/", 1)[-1]
+    return f"{name}/test"
+
+
+def _feature_test_file_candidates(text: str) -> tuple[str, ...]:
+    """CamelCase feature APIs that often map to ``Feature.test.ts`` files."""
+    found: list[str] = []
+    for m in re.finditer(
+        r"\b([A-Z][A-Za-z0-9]*(?:SSE|API|Client|Server|Builder|Stream)[A-Za-z0-9]*)\b",
+        text or "",
+    ):
+        name = m.group(1)
+        if name not in found:
+            found.append(name)
+    # Also accept standalone XxxSSE / HttpApiYyy tokens.
+    for m in re.finditer(r"\b(HttpApi[A-Z][A-Za-z0-9]+)\b", text or ""):
+        name = m.group(1)
+        if name not in found:
+            found.append(name)
+    return tuple(found[:8])
+
+
+def _consumer_runtime_path_in_command(subject: str) -> bool:
+    """Return True when *subject* names a packages/<runtime-suffix>/test directory."""
+    lower = subject.lower().replace("\\", "/")
+    for suf in _CONSUMER_PACKAGE_SUFFIXES:
+        token = suf.lstrip("-")
+        if re.search(
+            rf"(?:packages?/)?[\w@./-]*{re.escape(token)}[\w./-]*/tests?(?:\s|$)",
+            lower,
+        ):
+            return True
+        if re.search(
+            rf"--project\s+@[\w.-]+/[\w.-]*{re.escape(token)}\b",
+            lower,
+        ) and re.search(r"(?:^|\s)(?:packages?/)?[\w@./-]+/tests?(?:\s|$)", lower):
+            return True
+    return False
+
+
 def typescript_integration_task(user_text: str) -> bool:
     """Return True when the task needs consumer-package TS integration tests."""
     if suggested_typescript_verify_targets(user_text):
@@ -2059,33 +2131,100 @@ def typescript_integration_task(user_text: str) -> bool:
             "text/event-stream",
             "formatmessage",
             "handlestream",
-            "nodehttpserver",
             "client consumption",
+            "consumer package",
+            "integration package",
+            "runtime package",
+            "nodehttpserver",
         )
     ):
         return True
-    return bool(re.search(r"\bHttpApi[A-Z]\w+\b", user_text or ""))
+    packages = _npm_packages_mentioned(user_text)
+    if any(_is_consumer_runtime_package(p) for p in packages) and len(packages) >= 2:
+        return True
+    return False
 
 
 def suggested_typescript_verify_targets(user_text: str) -> tuple[dict[str, str], ...]:
-    """Suggested vitest targets for monorepo integration tasks."""
-    lower = str(user_text or "").lower()
+    """Infer consumer-package vitest targets from the task text.
+
+    Prefers runtime/integration packages (``*-node``, ``*-bun``, …) over
+    library packages that share the same scope. When the prompt never names
+    npm packages but clearly needs runtime integration (SSE / Node server /
+    client consumption), emit a suffix-based consumer target instead of
+    hardcoding any one benchmark monorepo.
+    """
+    text = str(user_text or "")
+    lower = text.lower()
+    packages = _npm_packages_mentioned(text)
+    features = _feature_test_file_candidates(text)
+    preferred = [
+        f
+        for f in features
+        if any(suf in f for suf in ("SSE", "API", "Client", "Server", "Stream"))
+    ]
+    feature = (preferred or features or ("Feature",))[0]
+    test_file = f"{feature}.test.ts"
+
+    consumers = [p for p in packages if _is_consumer_runtime_package(p)]
+    libraries = [p for p in packages if not _is_consumer_runtime_package(p)]
+
+    needs_runtime = any(
+        tok in lower
+        for tok in (
+            "text/event-stream",
+            "event-stream",
+            "formatmessage",
+            "handlestream",
+            "nodehttpserver",
+            "client consumption",
+            "consumer package",
+            "runtime package",
+        )
+    ) or (
+        bool(re.search(r"\bHttpApi[A-Z]\w+\b", text))
+        and ("sse" in lower or "stream" in lower)
+    )
+
     targets: list[dict[str, str]] = []
-    if (
-        "httpapisse" in lower
-        or "httpapiendpoint.sse" in lower
-        or ("httpapi" in lower and "sse" in lower and "stream" in lower)
-    ):
+    if consumers:
+        for consumer in consumers[:2]:
+            avoid = ""
+            scope = consumer.split("/", 1)[0]
+            for lib in libraries:
+                if lib.startswith(f"{scope}/") and lib != consumer:
+                    avoid = lib
+                    break
+            targets.append(
+                {
+                    "project": consumer,
+                    "test_file": test_file,
+                    "test_path": f"test/{test_file}",
+                    "path_hint": _package_path_hint(consumer),
+                    "avoid_project": avoid,
+                }
+            )
+        return tuple(targets)
+
+    if needs_runtime:
+        # Soft target: any vitest --project / packages path with a runtime suffix.
+        avoid = libraries[0] if libraries else ""
         targets.append(
             {
-                "project": "@effect/platform-node",
-                "test_file": "HttpApiSSE.test.ts",
-                "test_path": "test/HttpApiSSE.test.ts",
-                "path_hint": "platform-node/test",
-                "avoid_project": "@effect/platform",
+                "project": "",
+                "test_file": test_file,
+                "test_path": f"test/{test_file}",
+                "path_hint": "",
+                "avoid_project": avoid,
+                "match_consumer_runtime": "1",
             }
         )
     return tuple(targets)
+
+
+def _project_from_subject(subject: str) -> str:
+    match = re.search(r"--project\s+(@?[\w@./-]+)", subject)
+    return match.group(1) if match else ""
 
 
 def typescript_monorepo_integration_verify_matches(
@@ -2094,7 +2233,8 @@ def typescript_monorepo_integration_verify_matches(
     """Return True when verify runs the consumer-package tests the task needs.
 
     Bare ``--project <pkg>`` alone is not enough — the command must also name
-    the suggested ``test_file``, ``test_path``, or package ``path_hint``.
+    the suggested ``test_file``, ``test_path``, or package ``path_hint``, or
+    (for soft runtime targets) a consumer-runtime directory suite.
     """
     targets = suggested_typescript_verify_targets(user_text)
     if not targets:
@@ -2103,12 +2243,27 @@ def typescript_monorepo_integration_verify_matches(
     if not subject:
         return False
     for target in targets:
-        project = target["project"].lower()
-        if project not in subject and project.split("/", 1)[-1] not in subject:
-            continue
         test_file = target.get("test_file", "").lower()
         test_path = target.get("test_path", "").lower()
         path_hint = target.get("path_hint", "").lower()
+        if target.get("match_consumer_runtime"):
+            project = _project_from_subject(subject)
+            # Directory suite under a runtime package is enough (grading
+            # injects tests there; agent file names need not appear).
+            if _consumer_runtime_path_in_command(subject):
+                return True
+            if test_file and test_file in subject and _is_consumer_runtime_package(
+                project
+            ):
+                return True
+            continue
+        project = target["project"].lower()
+        if project and project not in subject and project.split("/", 1)[-1] not in subject:
+            continue
+        if not project and not _is_consumer_runtime_package(
+            _project_from_subject(subject)
+        ):
+            continue
         if test_file and test_file in subject:
             return True
         if test_path and test_path in subject:
@@ -2137,8 +2292,12 @@ def typescript_monorepo_directory_verify_matches(
     if re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx)\b", subject):
         return False
     for target in targets:
+        if target.get("match_consumer_runtime"):
+            if _consumer_runtime_path_in_command(subject):
+                return True
+            continue
         project = target["project"].lower()
-        if project not in subject and project.split("/", 1)[-1] not in subject:
+        if project and project not in subject and project.split("/", 1)[-1] not in subject:
             continue
         path_hint = target.get("path_hint", "").lower()
         test_path = target.get("test_path", "").lower()
@@ -2150,10 +2309,7 @@ def typescript_monorepo_directory_verify_matches(
                 f"{directory}/" in subject or subject.rstrip("/").endswith(directory)
             ):
                 return True
-        if re.search(
-            r"(?:packages?/)?[\w@./-]*platform-node[\w./-]*/tests?(?:\s|$)",
-            subject,
-        ):
+        if _consumer_runtime_path_in_command(subject):
             return True
     return False
 
@@ -2173,12 +2329,21 @@ def typescript_wrong_package_only(command: str, user_text: str) -> bool:
         avoid = target.get("avoid_project", "").lower()
         if avoid and avoid in subject:
             return True
-        impl_hint = target.get("path_hint", "").split("/", 1)[0]
+        # Soft runtime targets: a non-consumer --project is the wrong package.
+        if target.get("match_consumer_runtime"):
+            match = re.search(r"--project\s+(@?[\w@./-]+)", subject)
+            if match and not _is_consumer_runtime_package(match.group(1)):
+                return True
+            continue
+        path_hint = target.get("path_hint", "")
+        impl_hint = path_hint.split("/", 1)[0] if path_hint else ""
+        project = target.get("project", "").lower()
         if (
             impl_hint
             and impl_hint in subject
-            and "platform-node" not in subject
-            and target["project"].lower() not in subject
+            and project
+            and project not in subject
+            and not _consumer_runtime_path_in_command(subject)
         ):
             return True
     return False
@@ -2253,16 +2418,29 @@ def wire_format_contract_pending_items(
             "newlines inside one quoted string."
         )
     if "text/event-stream" in lower or "event-stream" in lower:
+        example = ""
+        for target in suggested_typescript_verify_targets(user_text):
+            if target.get("match_consumer_runtime"):
+                example = (
+                    "`npx vitest run --project <runtime-pkg> "
+                    "packages/<runtime-pkg>/test`"
+                )
+            else:
+                path = target.get("path_hint") or target.get("test_path") or "test"
+                example = (
+                    f"`npx vitest run --project {target['project']} "
+                    f"packages/{path}`"
+                )
+            break
         pending.append(
-            "Verify `toResponse` / `fromStream` / `toStream` against real "
-            "HttpClientResponse/HttpServerResponse shapes (status + stream "
-            "body). `toResponse` must yield status 200 and SSE headers "
-            "(`content-type: text/event-stream`, `cache-control: no-cache`, "
-            "`connection: keep-alive`). Run the consumer-package test "
-            "*directory* (for example "
-            "`npx vitest run --project @effect/platform-node "
-            "packages/platform-node/test`), not only an agent-authored "
-            "HttpApiSSE.test.ts under `@effect/platform`."
+            "Verify stream helpers (`toResponse` / `fromStream` / `toStream` "
+            "or equivalents) against real request/response shapes (status + "
+            "stream body). Streaming responses must yield status 200 and SSE "
+            "headers (`content-type: text/event-stream`, "
+            "`cache-control: no-cache`, `connection: keep-alive`). Run the "
+            "consumer/runtime package test *directory*"
+            + (f" (for example {example})" if example else "")
+            + ", not only an agent-authored unit test under the library package."
         )
     if "event:" in lower or "event field" in lower or "_tag" in lower:
         pending.append(
@@ -2287,6 +2465,18 @@ def typescript_monorepo_contract_pending_items(
         return ()
     pending: list[str] = []
     for target in suggested_typescript_verify_targets(user_text):
+        avoid = target.get("avoid_project") or "the library / implementation package"
+        if target.get("match_consumer_runtime"):
+            pending.append(
+                "Consumer/runtime package integration tests: run a directory "
+                "suite under the runtime package (name typically ends in "
+                "`-node` / `-bun` / `-browser`), e.g. "
+                "`npx vitest run --project <runtime-pkg> "
+                "packages/<runtime-pkg>/test` "
+                "(bare `--project` alone is not enough; no `| tail`/`grep`). "
+                f"Tests only under {avoid} are not enough."
+            )
+            continue
         path = target.get("path_hint") or target.get("test_path") or target.get(
             "test_file", ""
         )
@@ -2296,8 +2486,8 @@ def typescript_monorepo_contract_pending_items(
             f"packages/{path}` "
             "(directory suite — bare `--project` alone is not enough; no "
             "`| tail`/`grep`). Tests you wrote under "
-            f"{target.get('avoid_project', 'another package')} alone are "
-            "not enough; hidden eval tests run in the consumer package."
+            f"{avoid} alone are not enough; hidden eval tests often live in "
+            "the consumer/runtime package."
         )
     if not pending and typescript_integration_task(user_text):
         pending.append(
@@ -2308,7 +2498,12 @@ def typescript_monorepo_contract_pending_items(
 
 
 def adversarial_contract_specs(user_text: str) -> tuple[dict[str, Any], ...]:
-    """Spec-derived adversarial cases near-miss evals often miss."""
+    """Spec-derived adversarial cases that near-miss implementations often skip.
+
+    Patterns are keyed off contract language in the prompt (identifiers,
+    multi-binding errors, canonical serialization, refine/partial semantics,
+    error-text passthrough) — not benchmark task ids or gold strings.
+    """
     text = str(user_text or "")
     lower = text.lower()
     specs: list[dict[str, Any]] = []
@@ -2317,28 +2512,28 @@ def adversarial_contract_specs(user_text: str) -> tuple[dict[str, Any], ...]:
         tok in lower
         for tok in (
             "tzid",
-            "tzical",
+            "timezone id",
+            "time zone id",
+            "serialize",
+            "stringif",
             "rfc5545",
-            "timezone interop",
-            "rrule",
+            "icalendar",
         )
-    ):
+    ) and any(tok in lower for tok in ("timezone", "tzid", "zone", "rrule")):
         specs.append(
             {
-                "id": "tzid_zone_name",
+                "id": "stable_identifier_serialization",
                 "markers": (
-                    "tzical",
-                    "tzid=",
-                    "custom/zone",
-                    "_tzid",
+                    "tzid",
                     "zone key",
+                    "identifier",
+                    "serialize",
                 ),
                 "item": (
-                    "Timezone/TZID contract: when serializing recurring rules, "
-                    "emit the zone key (for example `TZID=Custom/Zone`), not "
-                    "`str(tzinfo)` / `tzicalvtz` repr. Add a case that builds a "
-                    "tzical (or similarly named) zone and assert the TZID token "
-                    "in `bash` (pytest `-k tzical` / a focused script)."
+                    "Stable identifier serialization: when emitting IDs / TZIDs / "
+                    "zone keys, use the canonical identifier string, not "
+                    "`str(object)` / repr forms. Add a case with a custom-named "
+                    "zone or similar and assert the wire token in tests."
                 ),
             }
         )
@@ -2349,29 +2544,28 @@ def adversarial_contract_specs(user_text: str) -> tuple[dict[str, Any], ...]:
             "typed binding",
             "typed variable",
             "type annotation",
-            "var left",
             "multiple variables",
+            "multi-variable",
         )
     ) or (
         "typed" in lower
-        and any(tok in lower for tok in ("binding", "variable", "anko"))
+        and any(tok in lower for tok in ("binding", "variable", "declaration"))
     ):
         specs.append(
             {
-                "id": "multi_binding_errors",
+                "id": "multi_name_error_reporting",
                 "markers": (
-                    "right",
-                    "left, right",
                     "multi",
                     "both names",
-                    "typedbindings",
+                    "every name",
+                    "each name",
+                    "all names",
                 ),
                 "item": (
-                    "Multi-binding error contract: when several names share a "
-                    "typed declaration that fails (for example "
-                    "`var left, right: int64 = [1, 2]`), the error text must "
-                    "mention every failing name (including `right`), not only "
-                    "the first. Cover this in tests/`go test -run`."
+                    "Multi-name error contract: when several identifiers share a "
+                    "typed declaration that fails, the error text must mention "
+                    "every failing name, not only the first. Cover this with a "
+                    "focused test."
                 ),
             }
         )
@@ -2382,24 +2576,29 @@ def adversarial_contract_specs(user_text: str) -> tuple[dict[str, Any], ...]:
             "shorthand",
             "expandshorthand",
             "compressshorthand",
-            "background-size",
-            "csstree",
+            "canonical form",
+            "round-trip",
+            "round trip",
         )
+    ) and any(
+        tok in lower
+        for tok in ("expand", "compress", "serialize", "default", "longhand")
     ):
         specs.append(
             {
-                "id": "css_default_serialization",
+                "id": "canonical_default_serialization",
                 "markers": (
-                    "auto auto",
-                    "background-size",
-                    "expandshorthand",
-                    "compressshorthand",
+                    "canonical",
+                    "round-trip",
+                    "round trip",
+                    "default",
+                    "longhand",
                 ),
                 "item": (
-                    "CSS shorthand defaults: two-value longhands such as "
-                    "`background-size` must serialize as `auto auto` (and "
-                    "layered `auto auto, auto auto`), not a single `auto`. "
-                    "Add expand/compress round-trip cases for these defaults."
+                    "Canonical default serialization: when a property's default "
+                    "is multi-valued, serialize the full canonical form on "
+                    "expand/compress round-trips — do not collapse it to a "
+                    "single shortened token. Add cases for those defaults."
                 ),
             }
         )
@@ -2425,10 +2624,9 @@ def adversarial_contract_specs(user_text: str) -> tuple[dict[str, Any], ...]:
                     "partialresult",
                 ),
                 "item": (
-                    "PartialResult.refine contract: refining must not overwrite "
+                    "Partial refine contract: refining must not overwrite "
                     "already-structured successful fields; failed fields should "
-                    "expose `errors` / `error_map` as the suite expects (value "
-                    "may be `None` when a required field fails). Add tests that "
+                    "expose `errors` / `error_map` as specified. Add tests that "
                     "refine with a colliding key and assert preservation."
                 ),
             }
@@ -2441,23 +2639,27 @@ def adversarial_contract_specs(user_text: str) -> tuple[dict[str, Any], ...]:
             "fallbackoptions",
             "fallback options",
             "async options",
+            "error message",
+            "loading options",
+            "option loading",
         )
-    ) or ("unavailable" in lower and "option" in lower):
+    ) and any(
+        tok in lower for tok in ("error", "fail", "fallback", "option", "message")
+    ):
         specs.append(
             {
-                "id": "tui_error_passthrough",
+                "id": "error_text_passthrough",
                 "markers": (
-                    "unavailable",
-                    "api unavailable",
-                    "fallback",
                     "error message",
+                    "fallback",
+                    "passthrough",
+                    "original error",
                 ),
                 "item": (
-                    "TUI/async options error contract: when options loading "
-                    "fails, the rendered UI (or fallback path) must include the "
-                    "original error text such as `unavailable` / "
-                    "`API unavailable`, not only ANSI chrome. Assert that "
-                    "substring in a vitest/jest case."
+                    "Error-text passthrough: when async option loading / UI "
+                    "fallback fails, the rendered path must include the "
+                    "original error substring from the failure, not only "
+                    "chrome/styling. Assert that substring in a test."
                 ),
             }
         )
@@ -2726,6 +2928,16 @@ def typescript_insufficient_verify_nudge(user_text: str) -> str:
     """Nudge when TS tests passed but did not satisfy the verify gate."""
     extras: list[str] = []
     for target in suggested_typescript_verify_targets(user_text):
+        if target.get("match_consumer_runtime"):
+            extras.append(
+                "Run the consumer/runtime package *directory* suite "
+                "(package name typically ends in `-node` / `-bun` / "
+                "`-browser`): `npx vitest run --project <runtime-pkg> "
+                "packages/<runtime-pkg>/test` without piping through "
+                "`tail`/`grep`. Bare `--project` alone is not enough; do not "
+                "finish on a test file created during this turn."
+            )
+            continue
         path = target.get("path_hint") or target.get("test_path") or ""
         extras.append(
             "Run the consumer-package *directory* suite: "
@@ -2743,9 +2955,10 @@ def typescript_insufficient_verify_nudge(user_text: str) -> str:
         )
     if wire_format_contract_task(user_text):
         extras.append(
-            "SSE wire format: emit raw JSON in `data:` lines (`data: {\"seq\":1}`), "
-            "not quoted JSON strings; multi-line data uses multiple `data:` lines; "
-            "exercise `toResponse` / `fromStream` / `toStream` status and headers."
+            "SSE wire format: emit raw JSON in `data:` lines "
+            "(`data: {\"seq\":1}`), not quoted JSON strings; multi-line data "
+            "uses multiple `data:` lines; exercise stream helper status and "
+            "headers (`toResponse` / `fromStream` / `toStream` or equivalents)."
         )
     for line in adversarial_contract_pending_items(user_text, ()):
         extras.append(line)

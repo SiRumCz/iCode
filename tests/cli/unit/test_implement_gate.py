@@ -2003,13 +2003,21 @@ def test_effect_sse_rejects_agent_test_and_accepts_consumer_suite() -> None:
         agent_created_test_names=agent_tests,
     )
     pending = post_verify_contract_pending_items(EFFECT_SSE_TASK, (wrong,))
-    assert any("platform-node" in line for line in pending)
+    assert any(
+        "runtime" in line.lower() or "consumer" in line.lower() or "-node" in line
+        for line in pending
+    )
     # Bare --project must NOT clear monorepo or wire-format contracts.
     bare_pending = post_verify_contract_pending_items(
         EFFECT_SSE_TASK, (bare_project,)
     )
     assert bare_pending
-    assert any("platform-node" in line or "directory" in line.lower() for line in bare_pending)
+    assert any(
+        "directory" in line.lower()
+        or "runtime" in line.lower()
+        or "consumer" in line.lower()
+        for line in bare_pending
+    )
     assert wire_format_contract_pending_items(EFFECT_SSE_TASK, (bare_project,))
     assert not wire_format_evidence_satisfied(EFFECT_SSE_TASK, (bare_project,))
     assert wire_format_evidence_satisfied(EFFECT_SSE_TASK, (consumer_dir,))
@@ -2044,31 +2052,43 @@ def test_adversarial_contracts_for_near_miss_specs() -> None:
         adversarial_contract_task,
         looks_like_oom_or_killed_verify,
         next_implement_continuation,
+        suggested_typescript_verify_targets,
         VERIFY_KILLED_NUDGE,
     )
 
+    # General serialization contract — no gold TZID string required.
     dateutil = (
-        "Add RFC5545 timezone interop for rrule with TZID and tzical zones."
+        "Add RFC5545 timezone interop for rrule with TZID zone identifiers."
     )
     assert adversarial_contract_task(dateutil)
     pending = adversarial_contract_pending_items(dateutil, ())
-    assert any("TZID" in line or "tzical" in line for line in pending)
+    assert any("identifier" in line.lower() or "TZID" in line for line in pending)
+    assert not any("Custom/Zone" in line or "tzicalvtz" in line for line in pending)
     assert (
-        adversarial_contract_pending_items(dateutil, ("pytest -k tzical",))
+        adversarial_contract_pending_items(dateutil, ("pytest -k tzid serialize",))
         == ()
     )
 
-    csstree = "Implement expandShorthand/compressShorthand for background-size."
-    assert any(
-        "auto auto" in line
-        for line in adversarial_contract_pending_items(csstree, ())
+    # Canonical defaults — no gold "auto auto" / task-name hardcoding.
+    css = (
+        "Implement expandShorthand/compressShorthand with round-trip "
+        "serialization of default longhand values."
     )
+    css_pending = adversarial_contract_pending_items(css, ())
+    assert any("canonical" in line.lower() for line in css_pending)
+    assert not any("auto auto" in line or "csstree" in line.lower() for line in css_pending)
+
+    # Soft monorepo target must not hardcode a single benchmark package.
+    targets = suggested_typescript_verify_targets(EFFECT_SSE_TASK)
+    assert targets
+    assert targets[0].get("match_consumer_runtime") == "1"
+    assert "effect" not in (targets[0].get("project") or "").lower()
 
     assert looks_like_oom_or_killed_verify(None, exit_code=137)
     assert looks_like_oom_or_killed_verify("Exit Code: 137\nKilled")
     assert (
         next_implement_continuation(
-            user_text="Add typed bindings in anko vm.",
+            user_text="Add typed bindings in the language vm.",
             mutate_attempted=True,
             verify_attempted=True,
             verify_succeeded=False,
@@ -2079,4 +2099,29 @@ def test_adversarial_contracts_for_near_miss_specs() -> None:
             verify_killed=True,
         )
         == VERIFY_KILLED_NUDGE
+    )
+
+
+def test_named_npm_packages_infer_consumer_target() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        suggested_typescript_verify_targets,
+        typescript_monorepo_directory_verify_matches,
+        typescript_wrong_package_only,
+    )
+
+    task = (
+        "Implement FooClient streaming in @acme/core and verify under "
+        "@acme/core-node NodeHttpServer integration."
+    )
+    targets = suggested_typescript_verify_targets(task)
+    assert targets
+    assert targets[0]["project"] == "@acme/core-node"
+    assert targets[0]["avoid_project"] == "@acme/core"
+    assert targets[0]["path_hint"] == "core-node/test"
+    assert typescript_wrong_package_only(
+        "npx vitest run --project @acme/core test/FooClient.test.ts", task
+    )
+    assert typescript_monorepo_directory_verify_matches(
+        task,
+        "npx vitest run --project @acme/core-node packages/core-node/test",
     )
