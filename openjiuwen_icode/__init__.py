@@ -6,4 +6,4 @@ Install: ``pip install openjiuwen-icode``
 Depends on the ``openjiuwen`` SDK (agent-core) for DeepAgent runtime.
 """
 
-__version__ = "0.1.39"
+__version__ = "0.1.40"

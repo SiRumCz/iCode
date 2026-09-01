@@ -2,7 +2,7 @@
   "name": "icode",
   "displayName": "iCode",
   "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "publisher": "openjiuwen",
   "license": "Apache-2.0",
   "repository": {
