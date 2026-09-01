@@ -1899,9 +1899,12 @@ def test_headless_envelope_includes_formatter_semantics() -> None:
     assert "sys.exit(0)" in wrapped
 
 
-EFFECT_SSE_TASK = open(
-    "/data/deepswe/repo/tasks/effect-sse-httpapi-streaming/instruction.md"
-).read()
+
+PROTOCOL_SSE_TASK = """
+Implement typed event streams over SSE.
+Responses must use content-type text/event-stream with no-cache keep-alive.
+Encode multi-line data frames on the wire.
+"""
 
 
 def test_vitest_piped_command_counts_as_verify() -> None:
@@ -1912,177 +1915,64 @@ def test_vitest_piped_command_counts_as_verify() -> None:
     )
 
     cmd = (
-        "cd /app && npx vitest run --project @effect/platform 2>&1 | tail -30"
+        "cd /app && npx vitest run --project @acme/core 2>&1 | tail -30"
     )
     assert "vitest" in bash_command_verify_subject(cmd)
     assert looks_like_verify_command(cmd)
-    assert not verify_command_qualifies_for_completion(
-        cmd,
-        native_mutated=False,
-        typescript_mutated=True,
-        success=True,
-        user_text=EFFECT_SSE_TASK,
-        agent_created_test_names=frozenset({"HttpApiSSE.test.ts"}),
-    )
-
-
-def test_effect_sse_rejects_agent_test_and_accepts_consumer_suite() -> None:
-    from openjiuwen_icode.features.implement_gate import (
-        is_full_typescript_suite_command,
-        post_verify_contract_pending_items,
-        typescript_monorepo_directory_verify_matches,
-        typescript_monorepo_integration_verify_matches,
-        typescript_wrong_package_only,
-        verify_command_qualifies_for_completion,
-        wire_format_contract_pending_items,
-        wire_format_evidence_satisfied,
-    )
-
-    wrong = "npx vitest run --project @effect/platform test/HttpApiSSE.test.ts"
+    # Agent-authored oracle: naming only the test file created this turn
+    # does not complete the gate (even when piped).
     agent_only = (
-        "npx vitest run --project @effect/platform-node test/HttpApiSSE.test.ts"
-    )
-    bare_project = "npx vitest run --project @effect/platform-node"
-    consumer_dir = (
-        "npx vitest run --project @effect/platform-node packages/platform-node/test"
-    )
-    agent_tests = frozenset({"HttpApiSSE.test.ts", "httpapisse.test.ts"})
-
-    assert typescript_wrong_package_only(wrong, EFFECT_SSE_TASK)
-    assert not typescript_monorepo_integration_verify_matches(
-        EFFECT_SSE_TASK, wrong
-    )
-    assert typescript_monorepo_integration_verify_matches(
-        EFFECT_SSE_TASK, agent_only
-    )
-    assert not typescript_monorepo_integration_verify_matches(
-        EFFECT_SSE_TASK, bare_project
-    )
-    assert typescript_monorepo_directory_verify_matches(
-        EFFECT_SSE_TASK, consumer_dir
-    )
-    assert not typescript_monorepo_directory_verify_matches(
-        EFFECT_SSE_TASK, agent_only
-    )
-    assert not typescript_monorepo_directory_verify_matches(
-        EFFECT_SSE_TASK, bare_project
-    )
-    assert not is_full_typescript_suite_command(agent_only)
-    assert not is_full_typescript_suite_command(bare_project)
-    assert is_full_typescript_suite_command(consumer_dir)
-    assert not verify_command_qualifies_for_completion(
-        wrong,
-        native_mutated=False,
-        typescript_mutated=True,
-        success=True,
-        user_text=EFFECT_SSE_TASK,
-        agent_created_test_names=agent_tests,
+        "npx vitest run --project @acme/core test/Streaming.test.ts 2>&1 | "
+        "tail -30"
     )
     assert not verify_command_qualifies_for_completion(
         agent_only,
         native_mutated=False,
         typescript_mutated=True,
         success=True,
-        user_text=EFFECT_SSE_TASK,
-        agent_created_test_names=agent_tests,
+        user_text=PROTOCOL_SSE_TASK,
+        agent_created_test_names=frozenset({"Streaming.test.ts"}),
     )
-    assert not verify_command_qualifies_for_completion(
-        bare_project,
-        native_mutated=False,
-        typescript_mutated=True,
-        success=True,
-        user_text=EFFECT_SSE_TASK,
-        agent_created_test_names=agent_tests,
+
+
+def test_protocol_content_type_contract_is_generic() -> None:
+    from openjiuwen_icode.features.implement_gate import (
+        extract_mentioned_content_types,
+        post_verify_contract_pending_items,
+        protocol_contract_evidence_satisfied,
+        protocol_contract_pending_items,
+        protocol_contract_task,
+        suggested_typescript_verify_targets,
     )
-    assert verify_command_qualifies_for_completion(
-        consumer_dir,
-        native_mutated=False,
-        typescript_mutated=True,
-        success=True,
-        user_text=EFFECT_SSE_TASK,
-        agent_created_test_names=agent_tests,
-    )
-    pending = post_verify_contract_pending_items(EFFECT_SSE_TASK, (wrong,))
+
+    assert protocol_contract_task(PROTOCOL_SSE_TASK)
+    assert "text/event-stream" in extract_mentioned_content_types(PROTOCOL_SSE_TASK)
+    pending = protocol_contract_pending_items(PROTOCOL_SSE_TASK, ())
     assert any(
-        "runtime" in line.lower() or "consumer" in line.lower() or "-node" in line
+        "content-type" in line.lower() or "text/event-stream" in line
         for line in pending
     )
-    # Bare --project must NOT clear monorepo or wire-format contracts.
-    bare_pending = post_verify_contract_pending_items(
-        EFFECT_SSE_TASK, (bare_project,)
+    # No SSE-specific gold checklist (formatMessage / data: {json} / toResponse).
+    assert not any(
+        "formatMessage" in line or "data: {json}" in line or "toResponse" in line
+        for line in pending
     )
-    assert bare_pending
-    assert any(
-        "directory" in line.lower()
-        or "runtime" in line.lower()
-        or "consumer" in line.lower()
-        for line in bare_pending
+    assert not protocol_contract_evidence_satisfied(PROTOCOL_SSE_TASK, ())
+    assert protocol_contract_evidence_satisfied(
+        PROTOCOL_SSE_TASK,
+        ("pytest -k 'text/event-stream headers'",),
     )
-    assert wire_format_contract_pending_items(EFFECT_SSE_TASK, (bare_project,))
-    assert not wire_format_evidence_satisfied(EFFECT_SSE_TASK, (bare_project,))
-    assert wire_format_evidence_satisfied(EFFECT_SSE_TASK, (consumer_dir,))
-    assert (
-        post_verify_contract_pending_items(EFFECT_SSE_TASK, (consumer_dir,))
-        == ()
-    )
+    # Domain keywords alone do not invent monorepo package targets.
+    assert suggested_typescript_verify_targets(PROTOCOL_SSE_TASK) == ()
+    assert post_verify_contract_pending_items(PROTOCOL_SSE_TASK, ()) == pending
 
 
-def test_wire_format_contract_pending_for_effect_sse() -> None:
+def test_oom_killed_verify_nudge() -> None:
     from openjiuwen_icode.features.implement_gate import (
-        wire_format_contract_pending_items,
-        wire_format_contract_task,
-        wire_format_evidence_satisfied,
-    )
-
-    assert wire_format_contract_task(EFFECT_SSE_TASK)
-    pending = wire_format_contract_pending_items(EFFECT_SSE_TASK, ())
-    assert any("data:" in line for line in pending)
-    assert any("text/event-stream" in line.lower() or "toResponse" in line for line in pending)
-    # Agent-named file under consumer project still leaves wire-format pending.
-    agent_file = (
-        "npx vitest run --project @effect/platform-node test/HttpApiSSE.test.ts"
-    )
-    assert wire_format_contract_pending_items(EFFECT_SSE_TASK, (agent_file,))
-    assert not wire_format_evidence_satisfied(EFFECT_SSE_TASK, (agent_file,))
-
-
-def test_adversarial_contracts_for_near_miss_specs() -> None:
-    from openjiuwen_icode.features.implement_gate import (
-        adversarial_contract_pending_items,
-        adversarial_contract_task,
         looks_like_oom_or_killed_verify,
         next_implement_continuation,
-        suggested_typescript_verify_targets,
         VERIFY_KILLED_NUDGE,
     )
-
-    # General serialization contract — no gold TZID string required.
-    dateutil = (
-        "Add RFC5545 timezone interop for rrule with TZID zone identifiers."
-    )
-    assert adversarial_contract_task(dateutil)
-    pending = adversarial_contract_pending_items(dateutil, ())
-    assert any("identifier" in line.lower() or "TZID" in line for line in pending)
-    assert not any("Custom/Zone" in line or "tzicalvtz" in line for line in pending)
-    assert (
-        adversarial_contract_pending_items(dateutil, ("pytest -k tzid serialize",))
-        == ()
-    )
-
-    # Canonical defaults — no gold "auto auto" / task-name hardcoding.
-    css = (
-        "Implement expandShorthand/compressShorthand with round-trip "
-        "serialization of default longhand values."
-    )
-    css_pending = adversarial_contract_pending_items(css, ())
-    assert any("canonical" in line.lower() for line in css_pending)
-    assert not any("auto auto" in line or "csstree" in line.lower() for line in css_pending)
-
-    # Soft monorepo target must not hardcode a single benchmark package.
-    targets = suggested_typescript_verify_targets(EFFECT_SSE_TASK)
-    assert targets
-    assert targets[0].get("match_consumer_runtime") == "1"
-    assert "effect" not in (targets[0].get("project") or "").lower()
 
     assert looks_like_oom_or_killed_verify(None, exit_code=137)
     assert looks_like_oom_or_killed_verify("Exit Code: 137\nKilled")
@@ -2104,24 +1994,48 @@ def test_adversarial_contracts_for_near_miss_specs() -> None:
 
 def test_named_npm_packages_infer_consumer_target() -> None:
     from openjiuwen_icode.features.implement_gate import (
+        post_verify_contract_pending_items,
         suggested_typescript_verify_targets,
         typescript_monorepo_directory_verify_matches,
+        typescript_monorepo_integration_verify_matches,
         typescript_wrong_package_only,
+        verify_command_qualifies_for_completion,
     )
 
     task = (
         "Implement FooClient streaming in @acme/core and verify under "
-        "@acme/core-node NodeHttpServer integration."
+        "@acme/core-node with content-type text/event-stream."
     )
     targets = suggested_typescript_verify_targets(task)
     assert targets
     assert targets[0]["project"] == "@acme/core-node"
     assert targets[0]["avoid_project"] == "@acme/core"
     assert targets[0]["path_hint"] == "core-node/test"
-    assert typescript_wrong_package_only(
-        "npx vitest run --project @acme/core test/FooClient.test.ts", task
+    wrong = "npx vitest run --project @acme/core test/FooClient.test.ts"
+    bare = "npx vitest run --project @acme/core-node"
+    consumer_dir = (
+        "npx vitest run --project @acme/core-node packages/core-node/test"
     )
-    assert typescript_monorepo_directory_verify_matches(
-        task,
-        "npx vitest run --project @acme/core-node packages/core-node/test",
+    agent_tests = frozenset({"FooClient.test.ts"})
+    assert typescript_wrong_package_only(wrong, task)
+    assert not typescript_monorepo_integration_verify_matches(task, bare)
+    assert typescript_monorepo_directory_verify_matches(task, consumer_dir)
+    assert not verify_command_qualifies_for_completion(
+        bare,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
     )
+    assert verify_command_qualifies_for_completion(
+        consumer_dir,
+        native_mutated=False,
+        typescript_mutated=True,
+        success=True,
+        user_text=task,
+        agent_created_test_names=agent_tests,
+    )
+    pending = post_verify_contract_pending_items(task, (wrong,))
+    assert any("core-node" in line or "Consumer-package" in line for line in pending)
+    assert post_verify_contract_pending_items(task, (consumer_dir,)) == ()
