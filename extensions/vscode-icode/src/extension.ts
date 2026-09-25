@@ -1,0 +1,902 @@
+import * as vscode from "vscode";
+import * as os from "os";
+import { AcpClient, SessionUpdate } from "./acp/client";
+import { AcpProcess } from "./acp/process";
+import {
+  messagesToMarkdown,
+  transcriptFilename,
+} from "./chat/exportMarkdown";
+import { ChatViewProvider } from "./chat/panel";
+import { SessionsTreeProvider, SessionItem, sessionIdFromArg, collectSessionIds } from "./chat/sessions";
+import { IcodeConfig, SECRET_API_KEY } from "./config";
+
+let extContext: vscode.ExtensionContext;
+let processHandle: AcpProcess | undefined;
+let client: AcpClient | undefined;
+let status: vscode.StatusBarItem;
+let output: vscode.OutputChannel;
+let chat: ChatViewProvider;
+let sessions: SessionsTreeProvider;
+let sessionsView: vscode.TreeView<SessionItem>;
+let currentSessionId: string | undefined;
+let attachedContext: string | undefined;
+/** Skip selection→load while a delete confirmation/request is in flight. */
+let suppressSessionLoad = false;
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  extContext = context;
+  output = vscode.window.createOutputChannel("iCode ACP");
+  status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  status.command = "icode.openChatInEditor";
+  status.text = "$(comment-discussion) iCode";
+  status.tooltip = "Open iCode Chat in Editor";
+  status.show();
+
+  chat = new ChatViewProvider(context.extensionUri, {
+    onSend: (text) => void sendPrompt(text),
+    onCancel: () => void cancelPrompt(),
+    onApprove: (interactionId, approved) =>
+      void approvePermission(interactionId, approved),
+    onClearAttachment: () => clearAttachment(),
+    onPickSession: () => void pickSession(),
+    onNewSession: () => void newSession(),
+    onExportTranscript: () => void exportTranscript(),
+  });
+
+  sessions = new SessionsTreeProvider(() => listSessions());
+
+  sessionsView = vscode.window.createTreeView("icode.sessionsView", {
+    treeDataProvider: sessions,
+    showCollapseAll: false,
+    canSelectMany: true,
+  });
+  sessionsView.onDidChangeSelection((e) => {
+    if (suppressSessionLoad) {
+      return;
+    }
+    // Multi-select is for bulk delete — only auto-load a single click/selection.
+    if (e.selection.length !== 1) {
+      return;
+    }
+    const sessionId = sessionIdFromArg(e.selection[0]);
+    if (sessionId) {
+      void loadSession(sessionId);
+    }
+  });
+
+  context.subscriptions.push(
+    output,
+    status,
+    sessionsView,
+    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chat),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("icode.submitKeybinding")) {
+        chat.pushSettings();
+      }
+    }),
+    vscode.commands.registerCommand("icode.openChat", () =>
+      vscode.commands.executeCommand("icode.chatView.focus")
+    ),
+    vscode.commands.registerCommand("icode.openChatInEditor", () =>
+      chat.openInEditor(vscode.ViewColumn.Active)
+    ),
+    vscode.commands.registerCommand("icode.newSession", () => void newSession()),
+    vscode.commands.registerCommand("icode.restartAgent", () => void restartAgent()),
+    vscode.commands.registerCommand("icode.setApiKey", () => void setApiKey()),
+    vscode.commands.registerCommand("icode.showDiff", () => void showDiff()),
+    vscode.commands.registerCommand("icode.attachActiveFile", () =>
+      void attachActiveFile()
+    ),
+    vscode.commands.registerCommand("icode.addSelectionToChat", () =>
+      void addSelectionToChat()
+    ),
+    vscode.commands.registerCommand("icode.addFileToIcode", (uri?: vscode.Uri) =>
+      void addFileToIcode(uri)
+    ),
+    vscode.commands.registerCommand(
+      "icode.addFolderToIcode",
+      (uri?: vscode.Uri) => void addFolderToIcode(uri)
+    ),
+    vscode.commands.registerCommand(
+      "icode.exportTranscript",
+      (arg?: unknown) => void exportTranscript(arg)
+    ),
+    vscode.commands.registerCommand("icode.refreshSessions", () => sessions.refresh()),
+    vscode.commands.registerCommand("icode.pickSession", () => void pickSession()),
+    vscode.commands.registerCommand(
+      "icode.loadSession",
+      (arg?: unknown) => void loadSession(resolveSessionId(arg))
+    ),
+    vscode.commands.registerCommand(
+      "icode.deleteSession",
+      (arg?: unknown, selected?: unknown) => void deleteSession(arg, selected)
+    )
+  );
+}
+
+export async function deactivate(): Promise<void> {
+  await disposeClient();
+}
+
+async function setApiKey(): Promise<void> {
+  const value = await vscode.window.showInputBox({
+    prompt: "iCode API key",
+    password: true,
+    ignoreFocusOut: true,
+  });
+  if (value === undefined) {
+    return;
+  }
+  await extContext.secrets.store(SECRET_API_KEY, value.trim());
+  vscode.window.showInformationMessage("iCode API key saved.");
+  await restartAgent();
+}
+
+function clearAttachment(): void {
+  attachedContext = undefined;
+  chat.setAttachment(undefined);
+}
+
+function fenceLang(languageId: string): string {
+  switch (languageId) {
+    case "typescriptreact":
+      return "tsx";
+    case "javascriptreact":
+      return "jsx";
+    case "shellscript":
+      return "bash";
+    case "jsonc":
+      return "json";
+    default:
+      return languageId || "";
+  }
+}
+
+function setTextAttachment(
+  pathLabel: string,
+  text: string,
+  lang: string,
+  kind: "file" | "selection" | "folder"
+): void {
+  const clipped = text.length > 60_000 ? `${text.slice(0, 60_000)}\n…` : text;
+  if (kind === "folder") {
+    attachedContext = `[Attached folder: ${pathLabel}]\n\`\`\`\n${clipped}\n\`\`\``;
+  } else {
+    attachedContext = `[Attached: ${pathLabel}]\n\`\`\`${lang}\n${clipped}\n\`\`\``;
+  }
+  const label =
+    kind === "selection"
+      ? `${pathLabel} (selection)`
+      : kind === "folder"
+        ? `${pathLabel}/ (folder)`
+        : `${pathLabel} (file)`;
+  chat.setAttachment(label);
+  chat.postSystem(`Attached ${label}.`);
+}
+
+function setEditorAttachment(
+  doc: vscode.TextDocument,
+  selection: vscode.Selection | undefined,
+  text: string,
+  selectionOnly: boolean
+): void {
+  const path = vscode.workspace.asRelativePath(doc.uri);
+  const hasSelection = Boolean(selection && !selection.isEmpty);
+  let range = "";
+  if (hasSelection && selection) {
+    const start = selection.start.line + 1;
+    const end = selection.end.line + 1;
+    range = start === end ? `:${start}` : `:${start}-${end}`;
+  }
+  const pathLabel = `${path}${range}`;
+  const lang = fenceLang(doc.languageId);
+  const kind = selectionOnly || hasSelection ? "selection" : "file";
+  // Keep quiet system line for selection-from-context-menu (matches prior UX).
+  const clipped = text.length > 60_000 ? `${text.slice(0, 60_000)}\n…` : text;
+  attachedContext = `[Attached: ${pathLabel}]\n\`\`\`${lang}\n${clipped}\n\`\`\``;
+  const label =
+    kind === "selection" ? `${pathLabel} (selection)` : `${pathLabel} (file)`;
+  chat.setAttachment(label);
+  if (!selectionOnly) {
+    chat.postSystem(`Attached ${label}.`);
+  }
+}
+
+async function focusChat(): Promise<void> {
+  chat.openInEditor(vscode.ViewColumn.Active);
+}
+
+async function addSelectionToChat(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.selection.isEmpty) {
+    vscode.window.showWarningMessage("Select text in the editor first.");
+    return;
+  }
+  const text = editor.document.getText(editor.selection);
+  if (!text.trim()) {
+    vscode.window.showWarningMessage("Selection is empty.");
+    return;
+  }
+  setEditorAttachment(editor.document, editor.selection, text, true);
+  await focusChat();
+}
+
+async function attachActiveFile(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showWarningMessage("No active editor to attach.");
+    return;
+  }
+  const selection = editor.selection;
+  const text =
+    selection && !selection.isEmpty
+      ? editor.document.getText(selection)
+      : editor.document.getText();
+  setEditorAttachment(editor.document, selection, text, false);
+  await focusChat();
+}
+
+function guessLangFromPath(filePath: string): string {
+  const ext = filePath.split(".").pop()?.toLowerCase() || "";
+  const map: Record<string, string> = {
+    ts: "typescript",
+    tsx: "tsx",
+    js: "javascript",
+    jsx: "jsx",
+    py: "python",
+    md: "markdown",
+    json: "json",
+    yml: "yaml",
+    yaml: "yaml",
+    sh: "bash",
+    bash: "bash",
+    rs: "rust",
+    go: "go",
+    java: "java",
+    css: "css",
+    html: "html",
+    toml: "toml",
+  };
+  return map[ext] || "";
+}
+
+async function addFileToIcode(uri?: vscode.Uri): Promise<void> {
+  let target = uri;
+  if (!target) {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showWarningMessage("No file to attach.");
+      return;
+    }
+    target = editor.document.uri;
+    // Prefer live editor buffer for the active file.
+    setEditorAttachment(
+      editor.document,
+      undefined,
+      editor.document.getText(),
+      false
+    );
+    await focusChat();
+    return;
+  }
+
+  try {
+    const stat = await vscode.workspace.fs.stat(target);
+    if (stat.type & vscode.FileType.Directory) {
+      await addFolderToIcode(target);
+      return;
+    }
+    const openDoc = vscode.workspace.textDocuments.find(
+      (d) => d.uri.toString() === target!.toString()
+    );
+    if (openDoc) {
+      setEditorAttachment(openDoc, undefined, openDoc.getText(), false);
+      await focusChat();
+      return;
+    }
+    const bytes = await vscode.workspace.fs.readFile(target);
+    const text = Buffer.from(bytes).toString("utf8");
+    const pathLabel = vscode.workspace.asRelativePath(target);
+    setTextAttachment(pathLabel, text, guessLangFromPath(pathLabel), "file");
+    await focusChat();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Failed to attach file: ${msg}`);
+  }
+}
+
+async function addFolderToIcode(uri?: vscode.Uri): Promise<void> {
+  const target =
+    uri ??
+    (vscode.window.activeTextEditor
+      ? vscode.Uri.joinPath(vscode.window.activeTextEditor.document.uri, "..")
+      : undefined);
+  if (!target) {
+    vscode.window.showWarningMessage("No folder to attach.");
+    return;
+  }
+  try {
+    const stat = await vscode.workspace.fs.stat(target);
+    if (!(stat.type & vscode.FileType.Directory)) {
+      await addFileToIcode(target);
+      return;
+    }
+    const entries = await vscode.workspace.fs.readDirectory(target);
+    const lines = entries
+      .map(([name, type]) => {
+        const mark = type & vscode.FileType.Directory ? "/" : "";
+        return `${name}${mark}`;
+      })
+      .sort((a, b) => a.localeCompare(b));
+    const clipped =
+      lines.length > 300
+        ? `${lines.slice(0, 300).join("\n")}\n… (${lines.length - 300} more)`
+        : lines.join("\n");
+    const pathLabel = vscode.workspace.asRelativePath(target);
+    setTextAttachment(pathLabel, clipped || "(empty)", "", "folder");
+    await focusChat();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Failed to attach folder: ${msg}`);
+  }
+}
+
+async function ensureClient(): Promise<AcpClient> {
+  if (client) {
+    return client;
+  }
+  const cfg = IcodeConfig.fromWorkspace();
+  const apiKey = (await extContext.secrets.get(SECRET_API_KEY)) ?? "";
+  processHandle = new AcpProcess(cfg, apiKey, output);
+  await processHandle.start();
+  client = new AcpClient(processHandle, {
+    trace: cfg.trace,
+    onLog: (line) => output.appendLine(line),
+    onNotification: (method, params) => {
+      if (method === "session/update") {
+        handleSessionUpdate(
+          params as { sessionId?: string; update?: SessionUpdate }
+        );
+      }
+    },
+  });
+  const init = await client.request("initialize", {});
+  const info = (
+    init as { agentInfo?: { name?: string; version?: string } }
+  ).agentInfo;
+  status.text = `$(comment-discussion) iCode ${info?.version ?? ""}`.trim();
+  status.tooltip = `${info?.name ?? "iCode"} connected`;
+  output.appendLine(`Initialized ${JSON.stringify(info)}`);
+  return client;
+}
+
+async function disposeClient(): Promise<void> {
+  try {
+    if (client && currentSessionId) {
+      await client.request("session/close", { sessionId: currentSessionId });
+    }
+    if (client) {
+      await client.request("shutdown", {});
+    }
+  } catch {
+    /* ignore */
+  }
+  client = undefined;
+  currentSessionId = undefined;
+  await processHandle?.stop();
+  processHandle = undefined;
+  status.text = "$(comment-discussion) iCode";
+  status.tooltip = "iCode disconnected";
+}
+
+async function restartAgent(): Promise<void> {
+  await disposeClient();
+  chat.postSystem("Agent stopped. Send a message to reconnect.");
+  vscode.window.showInformationMessage(
+    "iCode agent stopped. Send a message to reconnect."
+  );
+}
+
+async function workspaceCwd(): Promise<string> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    throw new Error("Open a workspace folder to use iCode.");
+  }
+  return folder.uri.fsPath;
+}
+
+async function ensureSession(): Promise<{
+  client: AcpClient;
+  sessionId: string;
+}> {
+  const c = await ensureClient();
+  if (!currentSessionId) {
+    const cwd = await workspaceCwd();
+    const result = (await c.request("session/new", { cwd })) as {
+      sessionId: string;
+    };
+    currentSessionId = result.sessionId;
+    chat.postSystem(`Session ${currentSessionId}`);
+    chat.setSessionInfo(currentSessionId);
+    sessions.refresh();
+  }
+  return { client: c, sessionId: currentSessionId };
+}
+
+async function newSession(): Promise<void> {
+  const c = await ensureClient();
+  if (currentSessionId) {
+    try {
+      await c.request("session/close", { sessionId: currentSessionId });
+    } catch {
+      /* ignore */
+    }
+  }
+  const cwd = await workspaceCwd();
+  const result = (await c.request("session/new", { cwd })) as {
+    sessionId: string;
+  };
+  currentSessionId = result.sessionId;
+  chat.clear();
+  chat.setSessionInfo(currentSessionId);
+  chat.postSystem(`New session ${currentSessionId}`);
+  sessions.refresh();
+}
+
+function resolveSessionId(arg?: unknown): string | undefined {
+  const fromArg = sessionIdFromArg(arg);
+  if (fromArg) {
+    return fromArg;
+  }
+  return sessionIdFromArg(sessionsView?.selection?.[0]);
+}
+
+async function pickSession(): Promise<void> {
+  const rows = await listSessions();
+  if (!rows.length) {
+    vscode.window.showInformationMessage("No saved sessions yet.");
+    return;
+  }
+  type Item = vscode.QuickPickItem & { sessionId: string };
+  const items: Item[] = rows.map((r) => {
+    const short =
+      r.sessionId.length > 8 ? r.sessionId.slice(-8) : r.sessionId;
+    const title = r.title || r.sessionId;
+    return {
+      label: title,
+      description: r.model ? `${r.model} · ${short}` : short,
+      detail: r.updatedAt ? `Updated ${r.updatedAt}` : r.sessionId,
+      sessionId: r.sessionId,
+    };
+  });
+  const picked = await vscode.window.showQuickPick(items, {
+    title: "Load iCode Session",
+    placeHolder: "Select a session to load into Chat",
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+  if (!picked) {
+    return;
+  }
+  await loadSession(picked.sessionId);
+}
+
+async function loadSession(sessionId?: string): Promise<void> {
+  if (!sessionId) {
+    return;
+  }
+  const c = await ensureClient();
+  const result = (await c.request("session/load", { sessionId })) as {
+    sessionId?: string;
+    title?: string;
+    model?: string;
+    messages?: Array<{ role?: string; content?: string; title?: string }>;
+  };
+  currentSessionId = result.sessionId || sessionId;
+  const messages = result.messages ?? [];
+  chat.loadHistory(messages);
+  const title = result.title || currentSessionId;
+  chat.setSessionInfo(title);
+  chat.postSystem(
+    messages.length
+      ? `Loaded “${title}” (${messages.length} messages)`
+      : `Loaded “${title}” (no messages yet)`
+  );
+}
+
+async function exportTranscript(arg?: unknown): Promise<void> {
+  const sid = sessionIdFromArg(arg) || currentSessionId;
+  let title = chat.getSessionTitle() || sid || "iCode Transcript";
+  let messages = chat.getTranscriptMessages();
+  let exportSessionId = currentSessionId;
+
+  // Prefer persisted timeline when exporting a different session from the tree.
+  if (sid && sid !== currentSessionId) {
+    try {
+      const c = await ensureClient();
+      const result = (await c.request("session/transcript", {
+        sessionId: sid,
+      })) as {
+        sessionId?: string;
+        title?: string;
+        messages?: Array<{ role?: string; content?: string; title?: string }>;
+      };
+      messages = (result.messages ?? []).map((m) => ({
+        role: String(m.role || ""),
+        content: String(m.content || ""),
+        title: m.title != null ? String(m.title) : "",
+      }));
+      title = result.title || sid;
+      exportSessionId = result.sessionId || sid;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Failed to load session transcript: ${msg}`);
+      return;
+    }
+  } else if ((!messages.length || !messages.some((m) => m.role === "user" || m.role === "assistant")) && sid) {
+    // Current session id known but chat empty — pull from disk.
+    try {
+      const c = await ensureClient();
+      const result = (await c.request("session/transcript", {
+        sessionId: sid,
+      })) as {
+        sessionId?: string;
+        title?: string;
+        messages?: Array<{ role?: string; content?: string; title?: string }>;
+      };
+      if (result.messages?.length) {
+        messages = result.messages.map((m) => ({
+          role: String(m.role || ""),
+          content: String(m.content || ""),
+          title: m.title != null ? String(m.title) : "",
+        }));
+        title = result.title || title;
+        exportSessionId = result.sessionId || sid;
+      }
+    } catch {
+      // Fall through with whatever is in the live transcript.
+    }
+  }
+
+  if (!messages.length) {
+    vscode.window.showWarningMessage("Nothing to export — transcript is empty.");
+    return;
+  }
+
+  const markdown = messagesToMarkdown(messages, {
+    title,
+    sessionId: exportSessionId,
+  });
+  const defaultUri = vscode.Uri.joinPath(
+    vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir()),
+    transcriptFilename(title)
+  );
+  const uri = await vscode.window.showSaveDialog({
+    defaultUri,
+    filters: { Markdown: ["md"] },
+    saveLabel: "Export Transcript",
+    title: "Export iCode Transcript",
+  });
+  if (!uri) {
+    return;
+  }
+  await vscode.workspace.fs.writeFile(uri, Buffer.from(markdown, "utf8"));
+  const open = "Open";
+  const choice = await vscode.window.showInformationMessage(
+    `Exported transcript to ${vscode.workspace.asRelativePath(uri)}`,
+    open
+  );
+  if (choice === open) {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, { preview: false });
+  }
+}
+
+async function deleteSession(arg?: unknown, selected?: unknown): Promise<void> {
+  const sessionIds = collectSessionIds(arg, selected, sessionsView?.selection);
+  if (sessionIds.length === 0) {
+    vscode.window.showWarningMessage(
+      "No session selected to delete. Select one or more sessions first."
+    );
+    return;
+  }
+  const summary =
+    sessionIds.length === 1
+      ? `Delete session “${sessionIds[0]}”?`
+      : `Delete ${sessionIds.length} sessions?`;
+  const detail =
+    sessionIds.length <= 5
+      ? sessionIds.join("\n")
+      : `${sessionIds.slice(0, 5).join("\n")}\n…and ${sessionIds.length - 5} more`;
+  suppressSessionLoad = true;
+  try {
+    const choice = await vscode.window.showWarningMessage(
+      `${summary}\n${detail}\nThis cannot be undone.`,
+      { modal: true },
+      "Delete"
+    );
+    if (choice !== "Delete") {
+      return;
+    }
+    const c = await ensureClient();
+    const failed: string[] = [];
+    let clearedCurrent = false;
+    for (const sessionId of sessionIds) {
+      try {
+        await c.request("session/delete", { sessionId });
+        sessions.markDeleted(sessionId);
+        if (currentSessionId === sessionId) {
+          currentSessionId = undefined;
+          clearedCurrent = true;
+        }
+      } catch (err) {
+        failed.push(sessionId);
+        output.appendLine(`delete ${sessionId}: ${err}`);
+      }
+    }
+    if (clearedCurrent) {
+      chat.clear();
+      chat.postSystem(
+        sessionIds.length === 1
+          ? `Deleted session ${sessionIds[0]}`
+          : `Deleted ${sessionIds.length - failed.length} sessions`
+      );
+    }
+    const deleted = sessionIds.length - failed.length;
+    if (failed.length === 0) {
+      vscode.window.showInformationMessage(
+        deleted === 1 ? "Deleted 1 session." : `Deleted ${deleted} sessions.`
+      );
+    } else {
+      vscode.window.showWarningMessage(
+        `Deleted ${deleted}, failed ${failed.length}. See “iCode ACP” output.`
+      );
+    }
+    sessions.refresh();
+  } finally {
+    suppressSessionLoad = false;
+  }
+}
+
+async function listSessions(): Promise<
+  Array<{
+    sessionId: string;
+    title?: string;
+    updatedAt?: string;
+    model?: string;
+  }>
+> {
+  try {
+    const c = await ensureClient();
+    const result = (await c.request("session/list", {})) as {
+      sessions?: Array<{
+        sessionId: string;
+        title?: string;
+        updatedAt?: string;
+        model?: string;
+      }>;
+    };
+    return result.sessions ?? [];
+  } catch (err) {
+    output.appendLine(`session/list failed: ${err}`);
+    return [];
+  }
+}
+
+async function sendPrompt(text: string): Promise<void> {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return;
+  }
+  chat.postUser(trimmed);
+  chat.setBusy(true);
+  try {
+    const { client: c, sessionId } = await ensureSession();
+    const promptBlocks: Array<Record<string, unknown>> = [
+      { type: "text", text: trimmed },
+    ];
+    if (attachedContext) {
+      promptBlocks.unshift({ type: "text", text: attachedContext });
+      clearAttachment();
+    }
+    const cwd = await workspaceCwd();
+    const result = (await c.request("session/prompt", {
+      sessionId,
+      cwd,
+      prompt: promptBlocks,
+    })) as {
+      ok?: boolean;
+      error?: string;
+      diff?: {
+        files?: Array<{ path: string; kind: string }>;
+      };
+    };
+    if (result.ok === false) {
+      chat.postSystem(`Error: ${result.error ?? "turn failed"}`);
+    }
+    if (result.diff?.files?.length) {
+      chat.postSystem(
+        `Mutations: ${result.diff.files.map((f) => f.path).join(", ")} — run iCode: Show Latest Diff`
+      );
+    }
+  } catch (err) {
+    chat.postSystem(`Failed: ${err}`);
+    output.appendLine(String(err));
+  } finally {
+    chat.setBusy(false);
+    sessions.refresh();
+  }
+}
+
+async function cancelPrompt(): Promise<void> {
+  if (!client || !currentSessionId) {
+    return;
+  }
+  await client.request("session/cancel", { sessionId: currentSessionId });
+  chat.postSystem("Cancel requested.");
+}
+
+async function approvePermission(
+  interactionId: string,
+  approved: boolean
+): Promise<void> {
+  if (!client || !currentSessionId) {
+    return;
+  }
+  await client.request("session/approve", {
+    sessionId: currentSessionId,
+    interactionId,
+    approved,
+  });
+  chat.postSystem(approved ? "Approved." : "Denied.");
+}
+
+async function showDiff(): Promise<void> {
+  if (!client || !currentSessionId) {
+    vscode.window.showWarningMessage("No active iCode session.");
+    return;
+  }
+  const result = (await client.request("session/diff", {
+    sessionId: currentSessionId,
+  })) as {
+    files?: Array<{
+      path: string;
+      kind: string;
+      before?: string;
+      after?: string;
+    }>;
+    summary?: string;
+  };
+  const files = result.files ?? [];
+  if (!files.length) {
+    vscode.window.showInformationMessage("No recorded mutations.");
+    if (result.summary) {
+      output.appendLine(result.summary);
+    }
+    return;
+  }
+  for (const file of files.slice(-5)) {
+    const left = await vscode.workspace.openTextDocument({
+      content: file.before ?? "",
+      language: "plaintext",
+    });
+    const right = await vscode.workspace.openTextDocument({
+      content: file.after ?? `(${file.kind}) ${file.path}`,
+      language: "plaintext",
+    });
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      left.uri,
+      right.uri,
+      `iCode: ${file.path}`
+    );
+  }
+}
+
+function handleSessionUpdate(params: {
+  sessionId?: string;
+  update?: SessionUpdate;
+}): void {
+  const update = params.update;
+  if (!update) {
+    return;
+  }
+  switch (update.sessionUpdate) {
+    case "agent_message_chunk": {
+      const text = extractText(update.content);
+      if (text) {
+        chat.appendAssistant(text);
+      }
+      break;
+    }
+    case "agent_thought_chunk": {
+      const text = extractText(update.content);
+      if (text) {
+        chat.appendThought(text);
+      }
+      break;
+    }
+    case "tool_call":
+      chat.postTool(
+        `▶ ${update.title ?? "tool"}`,
+        typeof update.rawInput === "string"
+          ? update.rawInput
+          : JSON.stringify(update.rawInput ?? {}),
+        update.toolCallId
+      );
+      break;
+    case "tool_call_update":
+      chat.postTool(
+        `■ ${update.title ?? "tool"} ${update.status ?? "done"}`,
+        clipText(extractUpdateText(update.content), 2000),
+        update.toolCallId
+      );
+      break;
+    case "usage_update":
+      chat.postSystem(
+        `Tokens in=${update.inputTokens ?? 0} out=${update.outputTokens ?? 0}`
+      );
+      break;
+    case "request_permission": {
+      const interactionId = String(update.interactionId ?? "");
+      const message = String(
+        update.message ?? `Approve ${update.toolName ?? "tool"}?`
+      );
+      chat.postPermission(interactionId, message);
+      void vscode.window
+        .showInformationMessage(message, "Allow", "Deny")
+        .then((choice) => {
+          if (choice === "Allow") {
+            void approvePermission(interactionId, true);
+          } else if (choice === "Deny") {
+            void approvePermission(interactionId, false);
+          }
+        });
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+function extractText(content: unknown): string {
+  if (!content) {
+    return "";
+  }
+  if (typeof content === "string") {
+    return content;
+  }
+  if (typeof content === "object" && content !== null && "text" in content) {
+    return String((content as { text: unknown }).text ?? "");
+  }
+  return "";
+}
+
+/** ACP tool_call_update may nest text under content[].content.text. */
+function extractUpdateText(content: unknown): string {
+  if (!content) {
+    return "";
+  }
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (item && typeof item === "object" && "content" in item) {
+          return extractText((item as { content: unknown }).content);
+        }
+        return extractText(item);
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return extractText(content);
+}
+
+function clipText(text: string, limit: number): string {
+  if (text.length <= limit) {
+    return text;
+  }
+  return `${text.slice(0, limit)}…`;
+}

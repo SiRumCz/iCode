@@ -1,0 +1,14 @@
+# Used when COVERAGE_PROCESS_START is set so CLI subprocesses (e2e smoke)
+# contribute to the same coverage run as pytest-cov.
+[run]
+parallel = true
+source = openjiuwen_icode
+omit =
+    tests/*
+    openjiuwen_icode/tui/app.py
+    openjiuwen_icode/cli.py
+    openjiuwen_icode/ui/repl.py
+
+[report]
+skip_empty = true
+show_missing = true

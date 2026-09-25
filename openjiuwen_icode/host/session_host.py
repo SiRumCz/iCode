@@ -1,0 +1,1198 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+"""SessionHost — translates EventBus user events into agent runs."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+from typing import Any, Optional, Protocol
+
+from openjiuwen.core.session.interaction.interactive_input import (
+    InteractiveInput,
+)
+from openjiuwen_icode.events import (
+    AgentMessage,
+    ApprovalRequest,
+    Event,
+    EventBus,
+    QuestionToUser,
+    SessionTitleUpdated,
+    ToolCallResult,
+    ToolCallStart,
+    TurnFailed,
+    TurnFinished,
+    TurnStarted,
+    UsageUpdate,
+    UserApproval,
+    UserAskAnswer,
+    UserCommand,
+    UserFollowUp,
+    UserInject,
+    UserInjectCancel,
+    UserInjectResult,
+    UserInterrupt,
+    UserMessage,
+    UserRetry,
+    UserSubAgentAbort,
+    UserSubAgentRetry,
+    chunk_to_events,
+)
+from openjiuwen_icode.features.session_title import (
+    TITLE_LLM,
+    TITLE_PROVISIONAL,
+    refine_title_with_llm,
+)
+from openjiuwen_icode.host.commands import handle_user_command
+from openjiuwen_icode.host.workdirs import WorkdirRegistry
+from openjiuwen_icode.storage.event_log import SessionEventLog
+from openjiuwen_icode.storage.session_store import SessionStore
+from openjiuwen_icode.features.mutations import MutationTracker
+
+logger = logging.getLogger(__name__)
+
+
+class AgentBackendLike(Protocol):
+    """Backend surface used by SessionHost."""
+
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+    async def run_streaming(
+        self,
+        query: Any,
+        session_id: Optional[str] = None,
+    ) -> Any: ...
+
+    async def abort(self) -> None: ...
+
+    async def steer(self, msg: str) -> None: ...
+
+    async def follow_up(self, msg: str) -> None: ...
+
+    def get_usage(self) -> dict[str, Any] | None: ...
+
+
+class SessionHost:
+    """Long-lived adapter: EventBus ``User*`` ↔ agent backend stream.
+
+    TUI/CLI frontends only publish/subscribe on the bus; they never call the
+    backend directly.
+
+    User turns run in a background task so ``publish(UserMessage)`` returns
+    quickly and the UI event loop stays responsive (Chrys-style).
+
+    Args:
+        auto_approve: When True (headless BYPASS), confirm/ask interactions
+            are resolved immediately without waiting for the frontend.
+    """
+
+    def __init__(
+        self,
+        bus: EventBus,
+        backend: AgentBackendLike,
+        *,
+        session_id: str | None = None,
+        auto_approve: bool = False,
+        session_store: SessionStore | None = None,
+        model_name: str | None = None,
+        workdirs: WorkdirRegistry | None = None,
+    ) -> None:
+        self._bus = bus
+        self._backend = backend
+        self._session_id = session_id
+        self._auto_approve = auto_approve
+        self._store = session_store
+        self._model_name = model_name or "unknown"
+        self._workdirs = workdirs if workdirs is not None else WorkdirRegistry()
+        self._started = False
+        self._turn_active = False
+        self._turn_task: asyncio.Task[None] | None = None
+        self._last_user_text: str = ""
+        self._pending_answers: dict[str, asyncio.Future[Any]] = {}
+        self._cancelled_injects: set[str] = set()
+        self._consumed_injects: set[str] = set()
+        self._event_log: SessionEventLog | None = None
+        self._event_log_tap = self._on_event_log_tap
+        self._mutations: MutationTracker | None = None
+        if self._store is not None and self._session_id:
+            if self._store.current is None:
+                self._store.new_session(self._session_id, self._model_name)
+            self._bind_event_log(self._session_id)
+            self._bind_mutations(self._session_id)
+
+    @property
+    def session_id(self) -> str | None:
+        return self._session_id
+
+    @property
+    def turn_active(self) -> bool:
+        return self._turn_active
+
+    @property
+    def session_store(self) -> SessionStore | None:
+        return self._store
+
+    @property
+    def workdirs(self) -> WorkdirRegistry:
+        return self._workdirs
+
+    @property
+    def event_log(self) -> SessionEventLog | None:
+        return self._event_log
+
+    @property
+    def mutations(self) -> MutationTracker | None:
+        return self._mutations
+
+    def _bind_mutations(self, session_id: str | None) -> None:
+        self._mutations = None
+        if self._store is None or not session_id:
+            return
+        workspace = None
+        if self._workdirs.primary:
+            workspace = Path(self._workdirs.primary)
+        else:
+            cfg = getattr(self._backend, "cfg", None)
+            cwd = getattr(cfg, "cwd", None) if cfg else None
+            if cwd:
+                workspace = Path(str(cwd))
+        self._mutations = MutationTracker(
+            self._store.store_dir / session_id / "mutations",
+            workspace=workspace,
+        )
+
+    def _bind_event_log(self, session_id: str | None) -> None:
+        """Point the EventBus tap at ``sessions/<id>/events.jsonl``."""
+        if self._event_log is not None:
+            self._bus.remove_tap(self._event_log_tap)
+            self._event_log = None
+        if self._store is None or not session_id:
+            return
+        self._event_log = SessionEventLog.for_session(
+            self._store.store_dir, session_id
+        )
+        self._bus.add_tap(self._event_log_tap)
+        self._bind_mutations(session_id)
+
+    def _on_event_log_tap(self, event: Event) -> None:
+        if self._event_log is None:
+            return
+        self._event_log.record_event(event)
+
+    async def start(self) -> None:
+        """Start the backend and subscribe to frontend events."""
+        if self._started:
+            return
+        await self._backend.start()
+        await self._bus.subscribe(UserMessage, self._on_user_message)
+        await self._bus.subscribe(UserInterrupt, self._on_user_interrupt)
+        await self._bus.subscribe(UserApproval, self._on_user_approval)
+        await self._bus.subscribe(UserAskAnswer, self._on_user_ask_answer)
+        await self._bus.subscribe(UserInject, self._on_user_inject)
+        await self._bus.subscribe(
+            UserInjectCancel, self._on_user_inject_cancel
+        )
+        await self._bus.subscribe(UserFollowUp, self._on_user_follow_up)
+        await self._bus.subscribe(UserRetry, self._on_user_retry)
+        await self._bus.subscribe(UserSubAgentAbort, self._on_user_subagent_abort)
+        await self._bus.subscribe(UserSubAgentRetry, self._on_user_subagent_retry)
+        await self._bus.subscribe(UserCommand, self._on_user_command)
+        self._started = True
+
+    async def stop(self) -> None:
+        """Unsubscribe, cancel an in-flight turn, and stop the backend."""
+        self._bind_event_log(None)
+        if not self._started:
+            return
+        await self._bus.unsubscribe(UserMessage, self._on_user_message)
+        await self._bus.unsubscribe(UserInterrupt, self._on_user_interrupt)
+        await self._bus.unsubscribe(UserApproval, self._on_user_approval)
+        await self._bus.unsubscribe(UserAskAnswer, self._on_user_ask_answer)
+        await self._bus.unsubscribe(UserInject, self._on_user_inject)
+        await self._bus.unsubscribe(
+            UserInjectCancel, self._on_user_inject_cancel
+        )
+        await self._bus.unsubscribe(UserFollowUp, self._on_user_follow_up)
+        await self._bus.unsubscribe(UserRetry, self._on_user_retry)
+        await self._bus.unsubscribe(
+            UserSubAgentAbort, self._on_user_subagent_abort
+        )
+        await self._bus.unsubscribe(
+            UserSubAgentRetry, self._on_user_subagent_retry
+        )
+        await self._bus.unsubscribe(UserCommand, self._on_user_command)
+        if self._turn_task is not None and not self._turn_task.done():
+            self._turn_task.cancel()
+            try:
+                await self._turn_task
+            except asyncio.CancelledError:
+                pass
+        self._turn_task = None
+        self._turn_active = False
+        self._fail_pending("host stopped")
+        await self._backend.stop()
+        self._started = False
+
+    def _fail_pending(self, reason: str) -> None:
+        for fut in self._pending_answers.values():
+            if not fut.done():
+                fut.set_exception(RuntimeError(reason))
+        self._pending_answers.clear()
+
+    async def _on_user_message(self, event: UserMessage) -> None:
+        if self._turn_active:
+            await self._bus.publish(
+                TurnFailed(
+                    error="turn already in progress",
+                    session_id=self._session_id,
+                )
+            )
+            return
+
+        self._last_user_text = event.text
+        if self._store is not None:
+            before = (
+                self._store.current.title if self._store.current else ""
+            )
+            self._store.add_message("user", event.text)
+            after = (
+                self._store.current.title if self._store.current else ""
+            )
+            if after and after != before:
+                await self._publish_title_if_any(
+                    sid=event.session_id or self._session_id
+                )
+        self._turn_active = True
+        self._turn_task = asyncio.create_task(
+            self._run_turn(event),
+            name="session-host-turn",
+        )
+
+    async def _run_turn(self, event: UserMessage) -> None:
+        sid = event.session_id or self._session_id
+        query: Any = event.text
+        assistant_parts: list[str] = []
+        mutate_attempted = False
+        verify_attempted = False
+        verify_succeeded = False
+        verify_killed = False
+        submit_attempted = False
+        shallow_only = True
+        integration_attempted = False
+        native_mutated = False
+        native_build_verified = False
+        python_mutated = False
+        python_suite_verified = False
+        go_mutated = False
+        go_suite_verified = False
+        typescript_mutated = False
+        typescript_suite_verified = False
+        typescript_suite_passed_unqualified = False
+        mutation_blob_parts: list[str] = []
+        pending_mutation_args: dict[str, Any] = {}
+        bash_commands: list[str] = []
+        suite_verify_without_mutation = 0
+        mutated_since_qualifying_verify = True
+        continuation_attempts = 0
+        chat_only_continuations = 0
+        any_tool_attempted = False
+        # Allow zero-mutation → shallow → integration → symbols → native →
+        # go-suite → python-suite → verify → verify-failed → submit chain.
+        max_continuations = 10 if self._auto_approve else 0
+        if self._mutations is not None and sid:
+            self._mutations.begin_turn(sid)
+        try:
+            from openjiuwen_icode.features.implement_gate import (
+                INCOMPLETE_IMPLEMENT_ERROR,
+                MAX_CHAT_ONLY_CONTINUATIONS,
+                GO_SUITE_NUDGE,
+                NATIVE_BUILD_NUDGE,
+                POST_MUTATION_EXPLORE_NUDGE,
+                PYTHON_SUITE_NUDGE,
+                STALL_CONTINUATION_NUDGE,
+                TS_SUITE_NUDGE,
+                VERIFY_FAILED_NUDGE,
+                VERIFY_NUDGE,
+                WORKTREE_NUDGE,
+                bash_result_succeeded,
+                chat_only_continuation_nudge,
+                post_verify_contract_nudge,
+                post_verify_contract_satisfied,
+                edit_args_look_shallow,
+                extract_bash_command,
+                extract_bash_command_from_result,
+                is_broken_tool_history_error,
+                is_fatal_provider_error,
+                looks_like_implement_task,
+                looks_like_native_build_command,
+                looks_like_oom_or_killed_verify,
+                looks_like_go_suite_command,
+                looks_like_python_suite_command,
+                looks_like_typescript_suite_command,
+                looks_like_submit_command,
+                looks_like_verify_command,
+                missing_prompt_symbols,
+                mutation_args_touch_go,
+                mutation_args_touch_native,
+                mutation_args_touch_python,
+                mutation_args_touch_typescript,
+                mutation_args_under_workspace,
+                mutation_text_from_args,
+                next_implement_continuation,
+                tool_is_edit_existing,
+                tool_runtime_continuation_nudge,
+                verify_command_qualifies_for_completion,
+                wrap_implement_continuation_query,
+                zero_mutation_continuation_nudge,
+            )
+            from openjiuwen_icode.features.mutations import (
+                MUTATING_TOOLS,
+                mutating_tool_applied,
+                test_paths_from_bash_command,
+                tool_result_payload,
+            )
+            from openjiuwen_icode.features.stream_stall import (
+                StreamStallError,
+            )
+
+            max_chat_only = (
+                MAX_CHAT_ONLY_CONTINUATIONS if self._auto_approve else 0
+            )
+
+            def _task_text() -> str:
+                return (self._last_user_text or event.text or "").strip()
+
+            def _workspace_root() -> Path | None:
+                if self._mutations is None:
+                    return None
+                return self._mutations.workspace
+
+            def _workspace_deliverable() -> bool:
+                return (
+                    self._mutations is not None
+                    and self._mutations.has_deliverable_workspace_changes()
+                )
+
+            def _continuation_nudge() -> str | None:
+                user_text = _task_text()
+                missing = missing_prompt_symbols(
+                    user_text=user_text,
+                    mutation_blob="\n".join(mutation_blob_parts),
+                )
+                workspace_mutated = _workspace_deliverable()
+                return next_implement_continuation(
+                    user_text=user_text,
+                    mutate_attempted=mutate_attempted,
+                    verify_attempted=verify_attempted,
+                    verify_succeeded=verify_succeeded,
+                    submit_attempted=submit_attempted,
+                    shallow_only=shallow_only,
+                    integration_attempted=integration_attempted,
+                    missing_symbols=missing,
+                    workspace_mutated=workspace_mutated,
+                    native_mutated=native_mutated,
+                    native_build_verified=native_build_verified,
+                    python_mutated=python_mutated,
+                    python_suite_verified=python_suite_verified,
+                    go_mutated=go_mutated,
+                    go_suite_verified=go_suite_verified,
+                    typescript_mutated=typescript_mutated,
+                    typescript_suite_verified=typescript_suite_verified,
+                    typescript_suite_passed_unqualified=(
+                        typescript_suite_passed_unqualified
+                    ),
+                    any_tool_attempted=any_tool_attempted,
+                    bash_commands=tuple(bash_commands),
+                    suite_verify_without_mutation=suite_verify_without_mutation,
+                    verify_killed=verify_killed,
+                )
+
+            def _empty_worktree_nudge(*, stream_saw_tool: bool) -> str:
+                if mutate_attempted:
+                    return WORKTREE_NUDGE
+                # Per-stream: zero tools this stream → chat/resume nudge even
+                # if earlier streams already called tools.
+                if not stream_saw_tool:
+                    return chat_only_continuation_nudge(
+                        _task_text(),
+                        any_tool_attempted=any_tool_attempted,
+                    )
+                return zero_mutation_continuation_nudge(
+                    _task_text(), any_tool_attempted=True
+                )
+
+            def _should_stop_zero_tool_stream(stream_saw_tool: bool) -> bool:
+                """Cap zero-tool streams per turn (ignore sticky prior tools)."""
+                if stream_saw_tool or mutate_attempted:
+                    return False
+                return chat_only_continuations >= max_chat_only
+
+            def _is_zero_tool_stream(stream_saw_tool: bool) -> bool:
+                return (not stream_saw_tool) and (not mutate_attempted)
+
+            await self._bus.publish(
+                TurnStarted(text=event.text, session_id=sid)
+            )
+            while True:
+                pending: list[ApprovalRequest | QuestionToUser] = []
+                saw_stream_text = False
+                stream_saw_tool = False
+                try:
+                    stream = self._backend.run_streaming(
+                        query,
+                        session_id=sid,
+                    )
+                    async for chunk in stream:
+                        for ev in chunk_to_events(chunk, session_id=sid):
+                            if isinstance(ev, AgentMessage) and ev.text:
+                                if ev.stream:
+                                    saw_stream_text = True
+                                    assistant_parts.append(ev.text)
+                                elif saw_stream_text:
+                                    # Skip answer/message duplicates of llm_output.
+                                    continue
+                                else:
+                                    assistant_parts.append(ev.text)
+                            if isinstance(ev, ToolCallStart):
+                                stream_saw_tool = True
+                                any_tool_attempted = True
+                                if ev.tool_name in MUTATING_TOOLS:
+                                    if ev.tool_call_id:
+                                        pending_mutation_args[ev.tool_call_id] = (
+                                            ev.tool_args
+                                        )
+                                elif ev.tool_name == "bash":
+                                    cmd = extract_bash_command(
+                                        ev.tool_args
+                                    )
+                                    if cmd:
+                                        bash_commands.append(cmd)
+                                    if looks_like_verify_command(cmd):
+                                        verify_attempted = True
+                                    if looks_like_submit_command(cmd):
+                                        submit_attempted = True
+                                    if self._mutations:
+                                        for path in test_paths_from_bash_command(
+                                            cmd
+                                        ):
+                                            self._mutations.record_bash_created_path(
+                                                path
+                                            )
+                                if self._mutations:
+                                    self._mutations.record_tool_mutation(
+                                        ev.tool_name, ev.tool_args
+                                    )
+                            if isinstance(ev, ToolCallResult):
+                                if ev.tool_name in MUTATING_TOOLS:
+                                    args = pending_mutation_args.pop(
+                                        ev.tool_call_id, None
+                                    )
+                                    result_payload, parsed_success = (
+                                        tool_result_payload(ev.result)
+                                    )
+                                    tool_success = (
+                                        ev.tool_success
+                                        if ev.tool_success is not None
+                                        else parsed_success
+                                    )
+                                    if mutating_tool_applied(
+                                        ev.tool_name,
+                                        result_payload,
+                                        tool_success=tool_success,
+                                    ):
+                                        if args is not None and not mutation_args_under_workspace(
+                                            args, _workspace_root()
+                                        ):
+                                            continue
+                                        mutate_attempted = True
+                                        verify_succeeded = False
+                                        bash_commands = []
+                                        suite_verify_without_mutation = 0
+                                        mutated_since_qualifying_verify = True
+                                        if args is not None:
+                                            if mutation_args_touch_native(args):
+                                                native_mutated = True
+                                                native_build_verified = False
+                                            if mutation_args_touch_python(args):
+                                                python_mutated = True
+                                                python_suite_verified = False
+                                            if mutation_args_touch_go(args):
+                                                go_mutated = True
+                                                go_suite_verified = False
+                                            if mutation_args_touch_typescript(args):
+                                                typescript_mutated = True
+                                                typescript_suite_verified = False
+                                                typescript_suite_passed_unqualified = False
+                                            if tool_is_edit_existing(ev.tool_name):
+                                                integration_attempted = True
+                                            chunk_text = mutation_text_from_args(
+                                                args
+                                            )
+                                            if chunk_text:
+                                                mutation_blob_parts.append(
+                                                    chunk_text
+                                                )
+                                            if not edit_args_look_shallow(args):
+                                                shallow_only = False
+                                if ev.tool_name == "bash":
+                                    cmd = extract_bash_command_from_result(
+                                        ev.result
+                                    )
+                                    if cmd and cmd not in bash_commands:
+                                        bash_commands.append(cmd)
+                                    if looks_like_verify_command(cmd):
+                                        verify_attempted = True
+                                        ok = bash_result_succeeded(
+                                            ev.result,
+                                            tool_success=ev.tool_success,
+                                        )
+                                        if ok is True:
+                                            if looks_like_native_build_command(
+                                                cmd
+                                            ):
+                                                native_build_verified = True
+                                            workspace_ok = _workspace_deliverable()
+                                            qualifies = (
+                                                workspace_ok
+                                                and verify_command_qualifies_for_completion(
+                                                    cmd,
+                                                    native_mutated=native_mutated,
+                                                    python_mutated=python_mutated,
+                                                    go_mutated=go_mutated,
+                                                    typescript_mutated=typescript_mutated,
+                                                    success=True,
+                                                    user_text=_task_text(),
+                                                    workspace_mutated=workspace_ok,
+                                                    agent_created_test_names=(
+                                                        self._mutations.agent_created_test_names()
+                                                        if self._mutations
+                                                        else frozenset()
+                                                    ),
+                                                )
+                                            )
+                                            if qualifies:
+                                                if looks_like_python_suite_command(
+                                                    cmd
+                                                ):
+                                                    python_suite_verified = True
+                                                if looks_like_go_suite_command(
+                                                    cmd
+                                                ):
+                                                    go_suite_verified = True
+                                                if looks_like_typescript_suite_command(
+                                                    cmd
+                                                ):
+                                                    typescript_suite_verified = True
+                                                verify_succeeded = True
+                                                verify_killed = False
+                                                if mutated_since_qualifying_verify:
+                                                    suite_verify_without_mutation = 1
+                                                    mutated_since_qualifying_verify = False
+                                                else:
+                                                    suite_verify_without_mutation += 1
+                                            else:
+                                                # A passing narrower or
+                                                # out-of-scope check does not
+                                                # invalidate an earlier
+                                                # qualifying verification.
+                                                # Mutations and actual command
+                                                # failures reset it separately.
+                                                if looks_like_typescript_suite_command(
+                                                    cmd
+                                                ):
+                                                    typescript_suite_passed_unqualified = True
+                                        elif ok is False:
+                                            verify_succeeded = False
+                                            if looks_like_oom_or_killed_verify(
+                                                ev.result
+                                            ):
+                                                verify_killed = True
+                                    if looks_like_submit_command(cmd):
+                                        submit_attempted = True
+                                if self._mutations:
+                                    self._mutations.refresh_after_hashes()
+                            if isinstance(ev, (ApprovalRequest, QuestionToUser)):
+                                loop = asyncio.get_running_loop()
+                                fut: asyncio.Future[Any] = loop.create_future()
+                                self._pending_answers[ev.interaction_id] = fut
+                                pending.append(ev)
+                                await self._bus.publish(ev)
+                                if self._auto_approve:
+                                    await self._auto_resolve(ev, sid)
+                            else:
+                                if (
+                                    isinstance(ev, AgentMessage)
+                                    and not ev.stream
+                                    and saw_stream_text
+                                ):
+                                    continue
+                                await self._bus.publish(ev)
+                except StreamStallError:
+                    if continuation_attempts < max_continuations:
+                        nudge = _continuation_nudge()
+                        if nudge is not None:
+                            continuation_attempts += 1
+                            query = wrap_implement_continuation_query(
+                                _task_text(), nudge
+                            )
+                            continue
+                    raise
+                except asyncio.CancelledError:
+                    # UserInterrupt cancels the turn task itself — still fail.
+                    turn = asyncio.current_task()
+                    if turn is not None and turn.cancelling():
+                        raise
+                    # CodeEditNudgeRail / DeepAgent.abort soft-stops an
+                    # explore-only (or post-mutation archaeology) stream.
+                    if (
+                        self._auto_approve
+                        and continuation_attempts < max_continuations
+                        and looks_like_implement_task(_task_text())
+                    ):
+                        if not _workspace_deliverable():
+                            chat_only_stream = _is_zero_tool_stream(
+                                stream_saw_tool
+                            )
+                            if chat_only_stream and _should_stop_zero_tool_stream(
+                                stream_saw_tool
+                            ):
+                                raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+                            forced = _empty_worktree_nudge(
+                                stream_saw_tool=stream_saw_tool
+                            )
+                            if chat_only_stream:
+                                chat_only_continuations += 1
+                            logger.warning(
+                                "implement stream aborted (explore soft-stop); "
+                                "continuing (%s/%s)",
+                                continuation_attempts + 1,
+                                max_continuations,
+                            )
+                            continuation_attempts += 1
+                            query = wrap_implement_continuation_query(
+                                _task_text(), forced
+                            )
+                            continue
+                        # Deliverable but still soft-aborted: force verify or
+                        # CLI contract checks — not another full-suite loop.
+                        forced = _continuation_nudge()
+                        suite_nudges = (
+                            TS_SUITE_NUDGE,
+                            GO_SUITE_NUDGE,
+                            PYTHON_SUITE_NUDGE,
+                            NATIVE_BUILD_NUDGE,
+                            VERIFY_FAILED_NUDGE,
+                            VERIFY_NUDGE,
+                        )
+                        task_text = _task_text()
+                        if verify_succeeded:
+                            if not post_verify_contract_satisfied(
+                                task_text, tuple(bash_commands)
+                            ):
+                                forced = post_verify_contract_nudge(
+                                    task_text, tuple(bash_commands)
+                                )
+                            elif forced is not None and any(
+                                forced == n or forced.startswith(n[:48])
+                                for n in suite_nudges
+                            ):
+                                forced = None
+                        if not verify_succeeded and (
+                            forced is None
+                            or not any(
+                                forced == n or forced.startswith(n[:48])
+                                for n in suite_nudges
+                            )
+                        ):
+                            forced = POST_MUTATION_EXPLORE_NUDGE
+                        if forced is None and not verify_succeeded:
+                            forced = VERIFY_NUDGE
+                        if forced is None and verify_succeeded:
+                            logger.info(
+                                "soft-stop with verify+post-verify contracts satisfied; "
+                                "finishing turn"
+                            )
+                            break
+                        logger.warning(
+                            "implement stream aborted post-mutation; "
+                            "continuing verify (%s/%s)",
+                            continuation_attempts + 1,
+                            max_continuations,
+                        )
+                        continuation_attempts += 1
+                        query = wrap_implement_continuation_query(
+                            _task_text(), forced
+                        )
+                        continue
+                    raise
+                except Exception as exc:
+                    # An interrupted tool batch can leave an assistant tool-call
+                    # tail that OpenAI-compatible providers reject. Continuing
+                    # on that SDK session only replays invalid history, so move
+                    # the provider context to a clean runtime session while
+                    # preserving the public session and workspace.
+                    if (
+                        self._auto_approve
+                        and continuation_attempts < max_continuations
+                        and looks_like_implement_task(_task_text())
+                        and is_broken_tool_history_error(exc)
+                    ):
+                        reset_runtime_session = getattr(
+                            self._backend, "reset_runtime_session", None
+                        )
+                        if callable(reset_runtime_session):
+                            try:
+                                await reset_runtime_session(sid)
+                            except Exception:  # noqa: BLE001
+                                logger.warning(
+                                    "failed to reset corrupted runtime session",
+                                    exc_info=True,
+                                )
+                            else:
+                                logger.warning(
+                                    "provider rejected unpaired tool history; "
+                                    "continuing in a clean runtime session "
+                                    "(%s/%s)",
+                                    continuation_attempts + 1,
+                                    max_continuations,
+                                )
+                                continuation_attempts += 1
+                                query = wrap_implement_continuation_query(
+                                    _task_text(), STALL_CONTINUATION_NUDGE
+                                )
+                                continue
+                    # Fatal provider errors (billing/auth) will not recover —
+                    # if the worktree already has a patch, finish the turn so
+                    # eval adapters can commit instead of burning git-log loops.
+                    if (
+                        self._auto_approve
+                        and looks_like_implement_task(_task_text())
+                        and _workspace_deliverable()
+                        and is_fatal_provider_error(exc)
+                    ):
+                        logger.warning(
+                            "fatal provider error with deliverable worktree; "
+                            "finishing turn: %s",
+                            exc,
+                        )
+                        break
+                    # Tool/backend crashes (e.g. ENAMETOOLONG from a malformed
+                    # write_file path) must not TurnFailed implement tasks
+                    # before empty-worktree continuations can recover.
+                    if (
+                        self._auto_approve
+                        and continuation_attempts < max_continuations
+                        and looks_like_implement_task(_task_text())
+                    ):
+                        logger.warning(
+                            "implement turn caught tool/runtime error; "
+                            "continuing (%s/%s): %s",
+                            continuation_attempts + 1,
+                            max_continuations,
+                            exc,
+                        )
+                        try:
+                            await self._backend.abort()
+                        except Exception:  # noqa: BLE001
+                            logger.debug(
+                                "abort after tool/runtime error failed",
+                                exc_info=True,
+                            )
+                        continuation_attempts += 1
+                        query = wrap_implement_continuation_query(
+                            _task_text(),
+                            tool_runtime_continuation_nudge(exc),
+                        )
+                        continue
+                    raise
+
+                if pending:
+                    interactive = InteractiveInput()
+                    for pev in pending:
+                        fut = self._pending_answers[pev.interaction_id]
+                        try:
+                            answer = await fut
+                        finally:
+                            self._pending_answers.pop(
+                                pev.interaction_id, None
+                            )
+                        _apply_interaction_answer(interactive, pev, answer)
+                    query = interactive
+                    continue
+
+                # Headless code tasks: require mutate → (full edit) →
+                # integration → prompt symbols → verify → submit.
+                nudge = _continuation_nudge()
+                chat_only_stream = _is_zero_tool_stream(stream_saw_tool)
+                if chat_only_stream:
+                    # Prefer chat/resume nudge over explore-without-edit
+                    # wording when *this* stream never called tools.
+                    nudge = chat_only_continuation_nudge(
+                        _task_text(),
+                        any_tool_attempted=any_tool_attempted,
+                    )
+                if nudge is not None and continuation_attempts < max_continuations:
+                    if chat_only_stream:
+                        if _should_stop_zero_tool_stream(stream_saw_tool):
+                            raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+                        chat_only_continuations += 1
+                    continuation_attempts += 1
+                    query = wrap_implement_continuation_query(
+                        _task_text(), nudge
+                    )
+                    continue
+
+                # Fail closed: never finish headless implement turns with an
+                # empty worktree (explore-only loops can otherwise exit cleanly
+                # and leave eval adapters with an empty model.patch).
+                task_text = _task_text()
+                if (
+                    self._auto_approve
+                    and looks_like_implement_task(task_text)
+                    and not _workspace_deliverable()
+                ):
+                    chat_only_stream = _is_zero_tool_stream(stream_saw_tool)
+                    if chat_only_stream and _should_stop_zero_tool_stream(
+                        stream_saw_tool
+                    ):
+                        raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+                    forced = _empty_worktree_nudge(
+                        stream_saw_tool=stream_saw_tool
+                    )
+                    if continuation_attempts < max_continuations:
+                        if chat_only_stream:
+                            chat_only_continuations += 1
+                        continuation_attempts += 1
+                        query = wrap_implement_continuation_query(
+                            task_text, forced
+                        )
+                        continue
+                    raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+
+                # Fail closed: do not report success with an empty patch /
+                # explore-only trajectory on implement tasks.
+                if nudge is not None and self._auto_approve:
+                    raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+
+                if (
+                    self._auto_approve
+                    and looks_like_implement_task(_task_text())
+                    and not _workspace_deliverable()
+                ):
+                    raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+
+                break
+
+            task_text = _task_text()
+            if (
+                self._auto_approve
+                and looks_like_implement_task(task_text)
+                and (
+                    self._mutations is None
+                    or not self._mutations.has_deliverable_workspace_changes()
+                )
+            ):
+                raise RuntimeError(INCOMPLETE_IMPLEMENT_ERROR)
+
+            if self._store is not None and assistant_parts:
+                self._store.add_message(
+                    "assistant", "".join(assistant_parts)
+                )
+            await self._publish_usage(sid)
+            await self._bus.publish(TurnFinished(session_id=sid))
+            from openjiuwen_icode.features.subagent_awaiting import (
+                publish_subagent_awaiting_state,
+            )
+
+            await publish_subagent_awaiting_state(
+                self._bus, self._backend, sid
+            )
+            # Fire-and-forget LLM title refine (never blocks the turn).
+            asyncio.create_task(
+                self._maybe_refine_title(
+                    sid,
+                    event.text,
+                    "".join(assistant_parts),
+                ),
+                name="session-title-refine",
+            )
+        except asyncio.CancelledError:
+            self._fail_pending("turn cancelled")
+            await self._bus.publish(
+                TurnFailed(error="turn cancelled", session_id=sid)
+            )
+            raise
+        except Exception as exc:
+            self._fail_pending(str(exc))
+            await self._bus.publish(
+                TurnFailed(error=str(exc), session_id=sid)
+            )
+        finally:
+            self._cancelled_injects.clear()
+            self._consumed_injects.clear()
+            if self._mutations is not None and self._mutations._current is not None:
+                # Failed/cancelled turn: still persist any recorded files.
+                self._mutations.refresh_after_hashes()
+                self._mutations.end_turn()
+            self._turn_active = False
+            self._turn_task = None
+
+    async def _auto_resolve(
+        self,
+        ev: ApprovalRequest | QuestionToUser,
+        sid: str | None,
+    ) -> None:
+        if isinstance(ev, ApprovalRequest):
+            await self._bus.publish(
+                UserApproval(
+                    interaction_id=ev.interaction_id,
+                    approved=True,
+                    feedback="",
+                    session_id=sid,
+                )
+            )
+            return
+        await self._bus.publish(
+            UserAskAnswer(
+                interaction_id=ev.interaction_id,
+                answers={},
+                answer="(auto)",
+                session_id=sid,
+            )
+        )
+
+    async def _publish_usage(self, sid: str | None) -> None:
+        get_usage = getattr(self._backend, "get_usage", None)
+        if get_usage is None:
+            return
+        summary = get_usage()
+        if not summary:
+            return
+        await self._bus.publish(
+            UsageUpdate(
+                input_tokens=int(summary.get("input_tokens", 0) or 0),
+                output_tokens=int(summary.get("output_tokens", 0) or 0),
+                total_tokens=int(summary.get("total_tokens", 0) or 0),
+                model_calls=int(summary.get("model_calls", 0) or 0),
+                last_input_tokens=int(
+                    summary.get("last_input_tokens", 0) or 0
+                ),
+                last_output_tokens=int(
+                    summary.get("last_output_tokens", 0) or 0
+                ),
+                session_id=sid,
+            )
+        )
+
+    async def _publish_title_if_any(self, *, sid: str | None) -> None:
+        """Emit SessionTitleUpdated when the store has a display title."""
+        if self._store is None or self._store.current is None:
+            return
+        title = self._store.current.title
+        if not title:
+            return
+        await self._bus.publish(
+            SessionTitleUpdated(
+                title=title,
+                source=self._store.current.title_source or TITLE_PROVISIONAL,
+                session_id=sid or self._session_id,
+            )
+        )
+
+    async def _maybe_refine_title(
+        self,
+        sid: str | None,
+        user_text: str,
+        assistant_text: str,
+    ) -> None:
+        """Async LLM refine; silent on failure / manual lock."""
+        if self._store is None or self._store.current is None:
+            return
+        cur = self._store.current
+        if cur.title_source not in {"", TITLE_PROVISIONAL}:
+            return
+        # Only refine once per session (first successful turn with reply).
+        user_msgs = [m for m in cur.messages if m.role == "user"]
+        asst_msgs = [m for m in cur.messages if m.role == "assistant"]
+        if len(user_msgs) != 1 or len(asst_msgs) < 1:
+            return
+        cfg = getattr(self._backend, "cfg", None)
+        refined = await refine_title_with_llm(user_text, assistant_text, cfg)
+        if not refined:
+            return
+        if self._store.set_title(refined, source=TITLE_LLM):
+            await self._bus.publish(
+                SessionTitleUpdated(
+                    title=refined,
+                    source=TITLE_LLM,
+                    session_id=sid or self._session_id,
+                )
+            )
+
+    async def _on_user_command(self, event: UserCommand) -> None:
+        await handle_user_command(self, event)
+
+    async def _on_user_subagent_abort(self, event: UserSubAgentAbort) -> None:
+        from openjiuwen_icode.features.subagent_control_bus import (
+            handle_subagent_abort,
+        )
+
+        sid = event.session_id or self._session_id
+        await handle_subagent_abort(
+            self._bus,
+            self._backend,
+            event.invocation_id,
+            sid,
+        )
+
+    async def _on_user_subagent_retry(self, event: UserSubAgentRetry) -> None:
+        from openjiuwen_icode.features.subagent_control_bus import (
+            handle_subagent_retry,
+        )
+
+        sid = event.session_id or self._session_id
+        await handle_subagent_retry(
+            self._bus,
+            self._backend,
+            event.invocation_id,
+            sid,
+        )
+
+    async def _on_user_interrupt(self, event: UserInterrupt) -> None:
+        await self._backend.abort()
+        task = self._turn_task
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _on_user_approval(self, event: UserApproval) -> None:
+        fut = self._pending_answers.get(event.interaction_id)
+        if fut is not None and not fut.done():
+            fut.set_result(event)
+
+    async def _on_user_ask_answer(self, event: UserAskAnswer) -> None:
+        fut = self._pending_answers.get(event.interaction_id)
+        if fut is not None and not fut.done():
+            fut.set_result(event)
+
+    async def _on_user_inject(self, event: UserInject) -> None:
+        inject_id = event.inject_id or event.event_id
+        sid = event.session_id or self._session_id
+        if inject_id in self._cancelled_injects:
+            await self._bus.publish(
+                UserInjectResult(
+                    inject_id=inject_id,
+                    consumed=False,
+                    session_id=sid,
+                )
+            )
+            return
+        if not self._turn_active:
+            await self._bus.publish(
+                UserInjectResult(
+                    inject_id=inject_id,
+                    consumed=False,
+                    session_id=sid,
+                )
+            )
+            return
+        await self._backend.steer(event.text)
+        self._consumed_injects.add(inject_id)
+        await self._bus.publish(
+            UserInjectResult(
+                inject_id=inject_id,
+                consumed=True,
+                session_id=sid,
+            )
+        )
+
+    async def _on_user_inject_cancel(
+        self, event: UserInjectCancel
+    ) -> None:
+        if event.inject_id in self._consumed_injects:
+            return
+        self._cancelled_injects.add(event.inject_id)
+
+    async def _on_user_follow_up(self, event: UserFollowUp) -> None:
+        text = (event.text or "").strip()
+        if not text:
+            return
+        if not self._turn_active:
+            # Late follow-up: start a normal user turn instead of dropping.
+            await self._on_user_message(
+                UserMessage(
+                    text=text,
+                    session_id=event.session_id or self._session_id,
+                )
+            )
+            return
+        await self._backend.follow_up(text)
+
+    async def _on_user_retry(self, event: UserRetry) -> None:
+        if self._turn_active:
+            await self._bus.publish(
+                TurnFailed(
+                    error="cannot retry while turn is active",
+                    session_id=event.session_id or self._session_id,
+                )
+            )
+            return
+        text = (event.text or self._last_user_text or "").strip()
+        if not text:
+            await self._bus.publish(
+                TurnFailed(
+                    error="nothing to retry",
+                    session_id=event.session_id or self._session_id,
+                )
+            )
+            return
+        await self._on_user_message(
+            UserMessage(
+                text=text,
+                session_id=event.session_id or self._session_id,
+            )
+        )
+
+
+def _apply_interaction_answer(
+    interactive: InteractiveInput,
+    pending: ApprovalRequest | QuestionToUser,
+    answer: Any,
+) -> None:
+    iid = pending.interaction_id
+    if isinstance(pending, QuestionToUser):
+        if isinstance(answer, UserAskAnswer):
+            if answer.answers:
+                interactive.update(iid, {"answers": answer.answers})
+            else:
+                interactive.update(
+                    iid, {"answer": answer.answer or ""}
+                )
+            return
+        interactive.update(iid, {"answer": str(answer)})
+        return
+
+    if isinstance(answer, UserApproval):
+        interactive.update(
+            iid,
+            {
+                "approved": answer.approved,
+                "feedback": (
+                    ""
+                    if answer.approved
+                    else (answer.feedback or "User rejected")
+                ),
+                "auto_confirm": False,
+            },
+        )
+        return
+    interactive.update(
+        iid,
+        {
+            "approved": bool(answer),
+            "feedback": "",
+            "auto_confirm": False,
+        },
+    )

@@ -1,0 +1,112 @@
+"""Unit tests for openjiuwen_icode.rails.tool_tracker."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from openjiuwen_icode.rails.tool_tracker import (
+    ToolTrackingRail,
+)
+from openjiuwen.harness.tools.base_tool import ToolOutput
+
+
+class _FakeReadResult:
+    def __init__(self, content: str, line_count: int) -> None:
+        self.data = {
+            "content": content,
+            "line_count": line_count,
+        }
+
+    def __str__(self) -> str:
+        return "success=True data={'content': 'line1\\nline2'}"
+
+
+@pytest.mark.asyncio
+async def test_after_tool_call_read_file_prefers_content_and_line_count() -> None:
+    session = SimpleNamespace(write_stream=AsyncMock())
+    ctx = SimpleNamespace(
+        session=session,
+        inputs=SimpleNamespace(
+            tool_name="read_file",
+            tool_args={"file_path": "/tmp/a.txt"},
+            tool_result=_FakeReadResult(
+                "     1\tline1\n     2\tline2",
+                2,
+            ),
+        ),
+    )
+
+    await ToolTrackingRail().after_tool_call(ctx)
+
+    session.write_stream.assert_awaited_once()
+    event = session.write_stream.await_args.args[0]
+    assert event.payload["tool_result"] == "     1\tline1\n     2\tline2"
+    assert event.payload["line_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_after_tool_call_non_read_file_keeps_stringified_result() -> None:
+    session = SimpleNamespace(write_stream=AsyncMock())
+    ctx = SimpleNamespace(
+        session=session,
+        inputs=SimpleNamespace(
+            tool_name="bash",
+            tool_args={"command": "pwd"},
+            tool_result=SimpleNamespace(stdout="/tmp"),
+        ),
+    )
+
+    await ToolTrackingRail().after_tool_call(ctx)
+
+    event = session.write_stream.await_args.args[0]
+    assert "stdout='/tmp'" in event.payload["tool_result"]
+    assert "line_count" not in event.payload
+
+
+@pytest.mark.asyncio
+async def test_after_tool_call_serializes_tool_output() -> None:
+    session = SimpleNamespace(write_stream=AsyncMock())
+    ctx = SimpleNamespace(
+        session=session,
+        inputs=SimpleNamespace(
+            tool_name="sessions_spawn",
+            tool_args={"subagent_type": "explore_agent"},
+            tool_result=ToolOutput(
+                success=True,
+                data={"status": "pending", "message": "queued"},
+            ),
+        ),
+    )
+
+    await ToolTrackingRail().after_tool_call(ctx)
+
+    event = session.write_stream.await_args.args[0]
+    assert event.payload["tool_success"] is True
+    assert event.payload["tool_data"]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_after_tool_call_fills_empty_failure_diagnostic() -> None:
+    session = SimpleNamespace(write_stream=AsyncMock())
+    tool_result = ToolOutput(success=False)
+    tool_msg = SimpleNamespace(content=str(tool_result))
+    ctx = SimpleNamespace(
+        session=session,
+        inputs=SimpleNamespace(
+            tool_name="edit_file",
+            tool_args={"file_path": "/tmp/a.py"},
+            tool_result=tool_result,
+            tool_msg=tool_msg,
+        ),
+    )
+
+    await ToolTrackingRail().after_tool_call(ctx)
+
+    event = session.write_stream.await_args.args[0]
+    assert event.payload["tool_success"] is False
+    assert "failed without diagnostic output" in event.payload["tool_result"]
+    assert tool_result.error == event.payload["tool_result"]
+    assert tool_msg.content == event.payload["tool_result"]

@@ -1,0 +1,347 @@
+{
+  "name": "icode",
+  "displayName": "iCode",
+  "description": "OpenJiuWen iCode — ACP coding agent for VS Code",
+  "version": "0.1.41",
+  "publisher": "openjiuwen",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://gitcode.com/michaelling/iCode.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "icode",
+    "acp",
+    "agent",
+    "openjiuwen"
+  ],
+  "activationEvents": [
+    "onView:icode.chatView",
+    "onCommand:icode.openChat",
+    "onCommand:icode.openChatInEditor",
+    "onCommand:icode.newSession",
+    "onCommand:icode.restartAgent",
+    "onCommand:icode.setApiKey",
+    "onCommand:icode.showDiff",
+    "onCommand:icode.attachActiveFile",
+    "onCommand:icode.addSelectionToChat",
+    "onCommand:icode.addFileToIcode",
+    "onCommand:icode.addFolderToIcode",
+    "onCommand:icode.exportTranscript",
+    "onCommand:icode.deleteSession",
+    "onCommand:icode.loadSession",
+    "onCommand:icode.pickSession"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "icode",
+          "title": "iCode",
+          "icon": "media/icode.svg"
+        }
+      ]
+    },
+    "views": {
+      "icode": [
+        {
+          "type": "webview",
+          "id": "icode.chatView",
+          "name": "Chat"
+        },
+        {
+          "id": "icode.sessionsView",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "icode.openChat",
+        "title": "iCode: Open Chat (Sidebar)",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "icode.openChatInEditor",
+        "title": "iCode: Open Chat in Editor",
+        "icon": "$(window)"
+      },
+      {
+        "command": "icode.newSession",
+        "title": "iCode: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "icode.restartAgent",
+        "title": "iCode: Restart Agent"
+      },
+      {
+        "command": "icode.setApiKey",
+        "title": "iCode: Set API Key"
+      },
+      {
+        "command": "icode.showDiff",
+        "title": "iCode: Show Latest Diff"
+      },
+      {
+        "command": "icode.attachActiveFile",
+        "title": "iCode: Attach Active File / Selection"
+      },
+      {
+        "command": "icode.addSelectionToChat",
+        "title": "Add Selection to iCode",
+        "category": "iCode",
+        "icon": "$(add)"
+      },
+      {
+        "command": "icode.addFileToIcode",
+        "title": "Add File to iCode",
+        "category": "iCode",
+        "icon": "$(add)"
+      },
+      {
+        "command": "icode.addFolderToIcode",
+        "title": "Add Folder to iCode",
+        "category": "iCode",
+        "icon": "$(add)"
+      },
+      {
+        "command": "icode.refreshSessions",
+        "title": "iCode: Refresh Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "icode.loadSession",
+        "title": "iCode: Load Session"
+      },
+      {
+        "command": "icode.pickSession",
+        "title": "iCode: Pick Session…",
+        "icon": "$(history)"
+      },
+      {
+        "command": "icode.exportTranscript",
+        "title": "iCode: Export Transcript",
+        "icon": "$(export)"
+      },
+      {
+        "command": "icode.deleteSession",
+        "title": "iCode: Delete Session(s)",
+        "icon": "$(trash)"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "icode.addSelectionToChat",
+          "when": "editorHasSelection",
+          "group": "0_icode@1"
+        },
+        {
+          "command": "icode.addFileToIcode",
+          "when": "editorTextFocus && !editorHasSelection",
+          "group": "0_icode@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "icode.addFileToIcode",
+          "when": "resourceSet && !explorerResourceIsFolder",
+          "group": "0_icode@1"
+        },
+        {
+          "command": "icode.addFolderToIcode",
+          "when": "explorerResourceIsFolder",
+          "group": "0_icode@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "icode.openChatInEditor",
+          "when": "view == icode.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "icode.pickSession",
+          "when": "view == icode.chatView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "icode.exportTranscript",
+          "when": "view == icode.chatView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "icode.newSession",
+          "when": "view == icode.chatView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "icode.refreshSessions",
+          "when": "view == icode.sessionsView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "icode.exportTranscript",
+          "when": "view == icode.sessionsView && viewItem == icodeSession",
+          "group": "inline"
+        },
+        {
+          "command": "icode.exportTranscript",
+          "when": "view == icode.sessionsView && viewItem == icodeSession",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "icode.deleteSession",
+          "when": "view == icode.sessionsView && viewItem == icodeSession",
+          "group": "inline"
+        },
+        {
+          "command": "icode.deleteSession",
+          "when": "view == icode.sessionsView && viewItem == icodeSession",
+          "group": "1_modification@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "iCode",
+      "properties": {
+        "icode.command": {
+          "type": "string",
+          "default": "icode",
+          "description": "Executable used to launch the ACP server (on PATH or absolute)."
+        },
+        "icode.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "acp"
+          ],
+          "description": "Arguments appended after the command (e.g. [\"acp\",\"--demo\"])."
+        },
+        "icode.env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Extra environment variables for the ACP child process."
+        },
+        "icode.apiBase": {
+          "type": "string",
+          "default": "",
+          "description": "API base URL (ICODE_API_BASE)."
+        },
+        "icode.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model id (ICODE_MODEL)."
+        },
+        "icode.provider": {
+          "type": "string",
+          "default": "",
+          "description": "Provider name (ICODE_PROVIDER)."
+        },
+        "icode.home": {
+          "type": "string",
+          "default": "",
+          "description": "Optional ICODE_HOME override."
+        },
+        "icode.project": {
+          "type": "string",
+          "default": "",
+          "description": "Optional ICODE_PROJECT / -p project root."
+        },
+        "icode.autoApprove": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve tool confirms in the ACP server. When false, the extension shows permission prompts."
+        },
+        "icode.trace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log ACP JSON-RPC traffic to the iCode ACP output channel."
+        },
+        "icode.submitKeybinding": {
+          "type": "string",
+          "enum": [
+            "modifierEnter",
+            "enter"
+          ],
+          "enumDescriptions": [
+            "Cmd+Enter (macOS) / Ctrl+Enter (Windows, Linux) to send; Enter inserts a newline",
+            "Enter to send; Shift+Enter inserts a newline"
+          ],
+          "default": "modifierEnter",
+          "description": "Keyboard shortcut used to send a chat message."
+        }
+      }
+    },
+    "walkthroughs": [
+      {
+        "id": "icode.onboarding",
+        "title": "Get started with iCode",
+        "description": "Connect the OpenJiuWen iCode agent inside VS Code.",
+        "steps": [
+          {
+            "id": "installCli",
+            "title": "Install the iCode CLI",
+            "description": "Ensure ``icode`` is on your PATH (``uv sync`` / ``pip install openjiuwen-icode``).",
+            "media": {
+              "markdown": "media/walkthrough-cli.md"
+            }
+          },
+          {
+            "id": "setKey",
+            "title": "Set your API key",
+            "description": "Run **iCode: Set API Key** (stored in SecretStorage).",
+            "media": {
+              "markdown": "media/walkthrough-key.md"
+            }
+          },
+          {
+            "id": "openChat",
+            "title": "Open Chat",
+            "description": "Click the iCode icon in the Activity Bar and send a prompt.",
+            "media": {
+              "markdown": "media/walkthrough-chat.md"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc -p ./ --noEmit",
+    "test": "npm run compile && node out/test/acpClient.test.js",
+    "vendor-md": "cp node_modules/marked/lib/marked.umd.js media/marked.umd.js && cp node_modules/dompurify/dist/purify.min.js media/purify.min.js && cp node_modules/@mermaid-js/tiny/dist/mermaid.tiny.js media/mermaid.tiny.min.js && cp node_modules/highlight.js/styles/github.min.css media/hljs-github.min.css && cp node_modules/highlight.js/styles/github-dark.min.css media/hljs-github-dark.min.css",
+    "package": "npm run vendor-md && npm run compile && npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "highlight.js": "^11.11.1",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@mermaid-js/tiny": "^11.16.1",
+    "dompurify": "^3.4.13",
+    "marked": "^18.0.9"
+  }
+}

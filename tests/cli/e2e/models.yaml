@@ -1,0 +1,30 @@
+# Default and named model presets for LLM e2e tests.
+#
+# Shared test API key env (required unless a preset overrides api_key_env):
+#   ICODE_E2E_API_KEY
+#
+# Selection:
+#   ICODE_E2E_MODEL=deepseek-v4-pro     # single preset (default)
+#   ICODE_E2E_MODELS=all               # every preset below
+#   ICODE_E2E_MODELS=deepseek-v4-pro,openai-gpt-4o
+#
+# Optional overrides (apply to every selected preset):
+#   ICODE_E2E_API_BASE / ICODE_E2E_PROVIDER / ICODE_E2E_MODEL_ID
+
+default: deepseek-v4-pro
+
+presets:
+  deepseek-v4-pro:
+    label: DeepSeek V4 Pro via OpenLux
+    model: deepseek-v4-pro
+    provider: OpenAI
+    api_base: https://api.openlux.ai/v1
+    # api_key_env defaults to ICODE_E2E_API_KEY
+
+  # openai-gpt-4o:
+  #   label: OpenAI GPT-4o
+  #   model: gpt-4o
+  #   provider: OpenAI
+  #   api_base: https://api.openai.com/v1
+  #   # Optional dedicated key; falls back to ICODE_E2E_API_KEY if unset.
+  #   api_key_env: ICODE_E2E_API_KEY_OPENAI
